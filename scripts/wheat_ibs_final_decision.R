@@ -338,6 +338,41 @@ write_html_table <- function(df, summary_df, file) {
 `%+%` <- function(a, b) paste0(a, b)
 write_html_table(final_df, summary_df, file.path(outdir, paste0(prefix, "_final_decision.html")))
 
+draw_issue_heatmap <- function(mat, file, title) {
+  if (nrow(mat) == 0 || ncol(mat) == 0) return(invisible(NULL))
+  cols <- colorRampPalette(rev(c(
+    "#A50026", "#D73027", "#F46D43", "#FDAE61", "#FEE090",
+    "#FFFFBF", "#E0F3F8", "#ABD9E9", "#74ADD1", "#4575B4", "#313695"
+  )))(100)
+  nx <- ncol(mat)
+  ny <- nrow(mat)
+  pdf(file, width = max(8, nx * 0.45 + 3), height = max(8, ny * 0.45 + 3))
+  par(mar = c(12, 12, 4, 2))
+  image_mat <- t(mat)[, ny:1, drop = FALSE]
+  image(1:nx, 1:ny, image_mat, col = cols, axes = FALSE, xlab = "", ylab = "", main = title, zlim = c(0.7, 1.0))
+  axis(1, at = 1:nx, labels = colnames(mat), las = 2, cex.axis = 0.7)
+  axis(2, at = 1:ny, labels = rev(rownames(mat)), las = 1, cex.axis = 0.7)
+  abline(h = seq(0.5, ny + 0.5, by = 1), col = "grey75")
+  abline(v = seq(0.5, nx + 0.5, by = 1), col = "grey75")
+  box(col = "grey50")
+  for (i in seq_len(nx)) {
+    for (j in seq_len(ny)) {
+      val <- mat[j, i]
+      y <- ny - j + 1
+      if (is.na(val)) {
+        rect(i - 0.5, y - 0.5, i + 0.5, y + 0.5, col = "grey85", border = "grey60")
+        text(i, y, "NA", cex = 0.55)
+      } else {
+        if (isTRUE(all.equal(val, 1, tolerance = 1e-8))) {
+          rect(i - 0.5, y - 0.5, i + 0.5, y + 0.5, border = "black", lwd = 2)
+        }
+        text(i, y, sprintf("%.2f", val), cex = 0.55, col = ifelse(val > 0.94 | val < 0.78, "white", "black"))
+      }
+    }
+  }
+  dev.off()
+}
+
 if (requireNamespace("openxlsx", quietly = TRUE)) {
   wb <- openxlsx::createWorkbook()
   openxlsx::addWorksheet(wb, "final_decision")
@@ -431,6 +466,21 @@ if (nzchar(opt[["dna-ibs-matrix"]]) && file.exists(opt[["dna-ibs-matrix"]])) {
       text(plot_df$x, plot_df$y, labels = ifelse(plot_df$final_decision %in% c("RESEQ", "REVIEW", "REMOVE", "NO_DATA"), plot_df$sample_id, ""), pos = 3, cex = 0.7)
       legend("topright", legend = names(plot_color), col = plot_color, pch = 19, bty = "n")
       dev.off()
+
+      issue_df <- final_df[final_df$final_decision %in% c("RESEQ", "REVIEW", "REMOVE", "NO_DATA"), , drop = FALSE]
+      if (nrow(issue_df) > 0) {
+        issue_rows <- unique(issue_df$expected_b25)
+        issue_cols <- unique(c(issue_df$expected_z23, issue_df$dna_best_match))
+        issue_rows <- issue_rows[issue_rows %in% row_ids]
+        issue_cols <- issue_cols[issue_cols %in% colnames(ibs_mat)]
+        if (length(issue_rows) > 0 && length(issue_cols) > 0) {
+          issue_mat <- ibs_mat[issue_rows, issue_cols, drop = FALSE]
+          row_labels <- issue_df$sample_id[match(issue_rows, issue_df$expected_b25)]
+          rownames(issue_mat) <- ifelse(is.na(row_labels), issue_rows, paste0(row_labels, "|", issue_rows))
+          colnames(issue_mat) <- colnames(issue_mat)
+          draw_issue_heatmap(issue_mat, file.path(outdir, paste0(prefix, "_issue_heatmap.pdf")), paste(prefix, "Issue Samples"))
+        }
+      }
     }
   }
 }

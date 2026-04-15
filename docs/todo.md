@@ -27,4 +27,3 @@
 - Add server deployment steps as a copy-paste shell block
 - Add sample map format examples for `Z23/B25` and `TC/SC/FC`
 - Add notes on heatmap interpretation for large sample sets
-

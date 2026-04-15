@@ -1,0 +1,46 @@
+# Results and runtime outputs
+results/
+tmp/
+logs/
+
+# Variant and sequencing data
+*.vcf
+*.vcf.gz
+*.vcf.gz.csi
+*.vcf.gz.tbi
+*.bcf
+*.bam
+*.bai
+*.cram
+*.crai
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+
+# PLINK / IBS outputs
+*.bed
+*.bim
+*.fam
+*.nosex
+*.log
+*.hh
+*.hom
+*.het
+*.genome
+*.mibs
+*.mibs.id
+*.mdist
+*.mdist.id
+
+# R / figures / temporary outputs
+*.pdf
+*.png
+*.jpeg
+*.jpg
+*.RData
+*.Rhistory
+
+# OS / editor
+.DS_Store
+Thumbs.db

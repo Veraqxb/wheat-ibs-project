@@ -125,6 +125,7 @@ join_rna_summary <- function(df, opt_name, source_name, expected_col) {
   path <- opt[[opt_name]] %||% ""
   if (!nzchar(path)) return(df)
   rna_df <- read_pair_summary(path, expected_col, "rna_expected_target")
+  if (is.null(rna_df) || nrow(rna_df) == 0) return(df)
   keep_cols <- c(expected_col, "ibs_expected", "best_x", "ibs_best", "second_best", "margin", "status")
   rna_df <- rna_df[, keep_cols, drop = FALSE]
   suffix <- tolower(source_name)

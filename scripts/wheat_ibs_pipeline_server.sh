@@ -24,6 +24,10 @@ Required variables in config:
 Optional variables:
   THREADS_PARALLEL    default 8
   CHR_SET             default 42
+  CHR_LIST            optional chromosome whitelist, e.g. "001 002 003"
+  GROUP_MODE          optional label such as 2group or 5group
+  PLOIDY_TAG          optional label such as C2/C4/C6
+  ALL_GROUPS          optional group list for record keeping
   MIN_MAC             default 2
   MAX_GENO            default 0.2
   HIGH_HET_THRESHOLD  default 0.05
@@ -61,6 +65,10 @@ HIGH_HET_THRESHOLD="${HIGH_HET_THRESHOLD:-0.05}"
 IBS_ZMIN="${IBS_ZMIN:-0.7}"
 IBS_ZMAX="${IBS_ZMAX:-1.0}"
 COPY_MODE="${COPY_MODE:-copy}"
+CHR_LIST="${CHR_LIST:-}"
+GROUP_MODE="${GROUP_MODE:-}"
+PLOIDY_TAG="${PLOIDY_TAG:-}"
+ALL_GROUPS="${ALL_GROUPS:-}"
 
 PIPELINE_DIR="$WORK_ROOT"
 INPUT_DIR="${PIPELINE_DIR}/01_input_vcf"
@@ -107,15 +115,32 @@ require_file "$MAP_FILE"
 log "Pipeline started for ${PREFIX}"
 log "Source VCF directory: ${VCF_SOURCE_DIR}"
 log "Working directory: ${WORK_ROOT}"
+[[ -n "$PLOIDY_TAG" ]] && log "Ploidy tag: ${PLOIDY_TAG}"
+[[ -n "$GROUP_MODE" ]] && log "Group mode: ${GROUP_MODE}"
+[[ -n "$ALL_GROUPS" ]] && log "All groups: ${ALL_GROUPS}"
+
+collect_expected_vcfs() {
+  local search_dir="$1"
+  local pattern="$2"
+
+  if [[ -n "$CHR_LIST" ]]; then
+    local chr
+    for chr in $CHR_LIST; do
+      find "$search_dir" -maxdepth 1 -type f -name "chr${chr}.${pattern}" | sort
+    done
+  else
+    find "$search_dir" -maxdepth 1 -type f -name "chr*.${pattern}" | sort
+  fi
+}
 
 prepare_vcfs() {
   log "Preparing input VCF files"
 
-  mapfile -t plain_vcfs < <(find "$VCF_SOURCE_DIR" -maxdepth 1 -type f -name "chr*.vcf" | sort)
-  mapfile -t gz_vcfs < <(find "$VCF_SOURCE_DIR" -maxdepth 1 -type f -name "chr*.vcf.gz" | sort)
+  mapfile -t plain_vcfs < <(collect_expected_vcfs "$VCF_SOURCE_DIR" "vcf")
+  mapfile -t gz_vcfs < <(collect_expected_vcfs "$VCF_SOURCE_DIR" "vcf.gz")
 
   if [[ ${#plain_vcfs[@]} -eq 0 && ${#gz_vcfs[@]} -eq 0 ]]; then
-    echo "No chr*.vcf or chr*.vcf.gz files found in $VCF_SOURCE_DIR" >&2
+    echo "No expected chromosome VCF files found in $VCF_SOURCE_DIR" >&2
     exit 1
   fi
 
@@ -124,8 +149,8 @@ prepare_vcfs() {
     printf '%s\n' "${plain_vcfs[@]}" | "$PARALLEL_BIN" -j "$THREADS_PARALLEL" "$BGZIP_BIN" -f {}
   fi
 
-  mapfile -t gz_vcfs < <(find "$VCF_SOURCE_DIR" -maxdepth 1 -type f -name "chr*.vcf.gz" | sort)
-  [[ ${#gz_vcfs[@]} -gt 0 ]] || { echo "No chr*.vcf.gz files found after compression" >&2; exit 1; }
+  mapfile -t gz_vcfs < <(collect_expected_vcfs "$VCF_SOURCE_DIR" "vcf.gz")
+  [[ ${#gz_vcfs[@]} -gt 0 ]] || { echo "No expected chromosome .vcf.gz files found after compression" >&2; exit 1; }
 
   log "Indexing source VCF files"
   printf '%s\n' "${gz_vcfs[@]}" | "$PARALLEL_BIN" -j "$THREADS_PARALLEL" "$BCFTOOLS_BIN" index -f {}
@@ -161,8 +186,16 @@ concat_vcfs() {
 
   (
     cd "$INPUT_DIR"
-    find . -maxdepth 1 -type f -name "chr*.vcf.gz" | sed 's|^./||' | sort > vcf.list
-    [[ -s vcf.list ]] || { echo "No chr*.vcf.gz files found in $INPUT_DIR" >&2; exit 1; }
+    : > vcf.list
+    if [[ -n "$CHR_LIST" ]]; then
+      local chr
+      for chr in $CHR_LIST; do
+        [[ -f "chr${chr}.vcf.gz" ]] && printf 'chr%s.vcf.gz\n' "$chr" >> vcf.list
+      done
+    else
+      find . -maxdepth 1 -type f -name "chr*.vcf.gz" | sed 's|^./||' | sort > vcf.list
+    fi
+    [[ -s vcf.list ]] || { echo "No chromosome VCF files found in $INPUT_DIR" >&2; exit 1; }
 
     "$BCFTOOLS_BIN" concat -f vcf.list -Oz -o "$MERGED_VCF" 2> "$CONCAT_ERR_LOG"
   )

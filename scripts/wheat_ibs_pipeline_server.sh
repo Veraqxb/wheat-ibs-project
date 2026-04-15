@@ -28,6 +28,10 @@ Optional variables:
   GROUP_MODE          optional label such as 2group or 5group
   PLOIDY_TAG          optional label such as C2/C4/C6
   ALL_GROUPS          optional group list for record keeping
+  GROUP_X_MATCH_COL   optional map column used to match IBS IDs for GROUP_X
+  GROUP_Y_MATCH_COL   optional map column used to match IBS IDs for GROUP_Y
+  GROUP_X_MATCH_MODE  optional transform mode for GROUP_X direct IDs
+  GROUP_Y_MATCH_MODE  optional transform mode for GROUP_Y direct IDs
   MIN_MAC             default 2
   MAX_GENO            default 0.2
   HIGH_HET_THRESHOLD  default 0.05
@@ -69,6 +73,10 @@ CHR_LIST="${CHR_LIST:-}"
 GROUP_MODE="${GROUP_MODE:-}"
 PLOIDY_TAG="${PLOIDY_TAG:-}"
 ALL_GROUPS="${ALL_GROUPS:-}"
+GROUP_X_MATCH_COL="${GROUP_X_MATCH_COL:-}"
+GROUP_Y_MATCH_COL="${GROUP_Y_MATCH_COL:-}"
+GROUP_X_MATCH_MODE="${GROUP_X_MATCH_MODE:-direct}"
+GROUP_Y_MATCH_MODE="${GROUP_Y_MATCH_MODE:-direct}"
 
 PIPELINE_DIR="$WORK_ROOT"
 INPUT_DIR="${PIPELINE_DIR}/01_input_vcf"
@@ -236,6 +244,10 @@ run_report() {
     --map "$MAP_FILE" \
     --group-y "$GROUP_Y" \
     --group-x "$GROUP_X" \
+    --group-y-match-col "$GROUP_Y_MATCH_COL" \
+    --group-x-match-col "$GROUP_X_MATCH_COL" \
+    --group-y-match-mode "$GROUP_Y_MATCH_MODE" \
+    --group-x-match-mode "$GROUP_X_MATCH_MODE" \
     --outdir "$REPORT_DIR" \
     --prefix "$PREFIX" \
     --zmin "$IBS_ZMIN" \

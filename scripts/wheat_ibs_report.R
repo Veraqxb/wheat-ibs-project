@@ -16,11 +16,20 @@ parse_args <- function(x) {
 }
 
 opt <- parse_args(args)
+`%||%` <- function(x, y) {
+  if (is.null(x)) y else x
+}
+
 required <- c("mibs", "id", "map", "group-y", "group-x", "outdir", "prefix", "zmin", "zmax")
 missing <- required[!required %in% names(opt)]
 if (length(missing) > 0) {
   stop("Missing arguments: ", paste(missing, collapse = ", "))
 }
+
+opt[["group-y-match-col"]] <- opt[["group-y-match-col"]] %||% ""
+opt[["group-x-match-col"]] <- opt[["group-x-match-col"]] %||% ""
+opt[["group-y-match-mode"]] <- opt[["group-y-match-mode"]] %||% "direct"
+opt[["group-x-match-mode"]] <- opt[["group-x-match-mode"]] %||% "direct"
 
 dir.create(opt[["outdir"]], recursive = TRUE, showWarnings = FALSE)
 
@@ -65,6 +74,19 @@ if (!(opt[["group-x"]] %in% available_cols)) {
   )
 }
 
+if (nzchar(opt[["group-y-match-col"]]) && !(opt[["group-y-match-col"]] %in% available_cols)) {
+  stop(
+    "Missing map column for group-y-match-col: ", opt[["group-y-match-col"]],
+    "\nAvailable columns: ", paste(available_cols, collapse = ", ")
+  )
+}
+if (nzchar(opt[["group-x-match-col"]]) && !(opt[["group-x-match-col"]] %in% available_cols)) {
+  stop(
+    "Missing map column for group-x-match-col: ", opt[["group-x-match-col"]],
+    "\nAvailable columns: ", paste(available_cols, collapse = ", ")
+  )
+}
+
 mibs_vec <- scan(opt[["mibs"]], quiet = TRUE)
 expected_tri <- n * (n + 1) / 2
 expected_square <- n * n
@@ -105,6 +127,19 @@ rdylbu_cols <- colorRampPalette(rev(rdylbu_base))(100)
 
 zmin <- as.numeric(opt[["zmin"]])
 zmax <- as.numeric(opt[["zmax"]])
+
+apply_match_mode <- function(x, mode) {
+  if (mode == "direct") return(x)
+  if (mode == "b25_to_2") return(sub("^B25C2_", "2_", x))
+  stop("Unsupported match mode: ", mode)
+}
+
+resolve_group_ids <- function(map_df, logical_col, match_col, match_mode) {
+  logical_ids <- map_df[[logical_col]]
+  raw_match_ids <- if (nzchar(match_col)) map_df[[match_col]] else logical_ids
+  match_ids <- apply_match_mode(raw_match_ids, match_mode)
+  list(label = logical_ids, match = match_ids)
+}
 
 draw_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", show_values = TRUE) {
   nx <- ncol(sub_mat)
@@ -170,13 +205,15 @@ draw_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", show_values
 
 cat("[2/6] Building cross-group matrix...\n")
 
-group_y_vals <- map_df[[opt[["group-y"]]]]
-group_x_vals <- map_df[[opt[["group-x"]]]]
+group_y <- resolve_group_ids(map_df, opt[["group-y"]], opt[["group-y-match-col"]], opt[["group-y-match-mode"]])
+group_x <- resolve_group_ids(map_df, opt[["group-x"]], opt[["group-x-match-col"]], opt[["group-x-match-mode"]])
 
-keep_idx <- !is.na(group_y_vals) &
-            !is.na(group_x_vals) &
-            (group_y_vals %in% ids) &
-            (group_x_vals %in% ids)
+keep_idx <- !is.na(group_y$label) &
+            !is.na(group_x$label) &
+            !is.na(group_y$match) &
+            !is.na(group_x$match) &
+            (group_y$match %in% ids) &
+            (group_x$match %in% ids)
 
 valid_map <- map_df[keep_idx, , drop = FALSE]
 if (nrow(valid_map) == 0) {
@@ -188,9 +225,17 @@ if (nrow(valid_map) == 0) {
   )
 }
 
-rows_y <- valid_map[[opt[["group-y"]]]]
-cols_x <- valid_map[[opt[["group-x"]]]]
-sub_mat <- mat[rows_y, cols_x, drop = FALSE]
+valid_group_y <- resolve_group_ids(valid_map, opt[["group-y"]], opt[["group-y-match-col"]], opt[["group-y-match-mode"]])
+valid_group_x <- resolve_group_ids(valid_map, opt[["group-x"]], opt[["group-x-match-col"]], opt[["group-x-match-mode"]])
+
+rows_y_label <- valid_group_y$label
+rows_y_match <- valid_group_y$match
+cols_x_label <- valid_group_x$label
+cols_x_match <- valid_group_x$match
+
+sub_mat <- mat[rows_y_match, cols_x_match, drop = FALSE]
+rownames(sub_mat) <- rows_y_label
+colnames(sub_mat) <- cols_x_label
 
 if (nrow(sub_mat) == 0 || ncol(sub_mat) == 0) {
   stop("Cross-group IBS sub-matrix is empty after filtering.")
@@ -212,8 +257,10 @@ draw_heatmap(
 cat("[3/6] Summarising best-match pairs...\n")
 
 pair_summary <- data.frame(
-  sample_y = rows_y,
-  expected_x = cols_x,
+  sample_y = rows_y_label,
+  sample_y_match = rows_y_match,
+  expected_x = cols_x_label,
+  expected_x_match = cols_x_match,
   ibs_expected = NA_real_,
   best_x = NA_character_,
   ibs_best = NA_real_,
@@ -225,15 +272,17 @@ pair_summary <- data.frame(
 
 for (i in seq_len(nrow(pair_summary))) {
   sample_y <- pair_summary$sample_y[i]
+  sample_y_match <- pair_summary$sample_y_match[i]
   expected_x <- pair_summary$expected_x[i]
+  expected_x_match <- pair_summary$expected_x_match[i]
 
-  vals <- as.numeric(mat[sample_y, cols_x])
-  names(vals) <- cols_x
+  vals <- as.numeric(mat[sample_y_match, cols_x_match])
+  names(vals) <- cols_x_label
   ord <- order(vals, decreasing = TRUE, na.last = TRUE)
   best_idx <- ord[1]
   second_idx <- if (length(ord) >= 2) ord[2] else ord[1]
 
-  pair_summary$ibs_expected[i] <- unname(mat[sample_y, expected_x])
+  pair_summary$ibs_expected[i] <- unname(mat[sample_y_match, expected_x_match])
   pair_summary$best_x[i] <- names(vals)[best_idx]
   pair_summary$ibs_best[i] <- vals[best_idx]
   pair_summary$second_best[i] <- vals[second_idx]
@@ -271,22 +320,32 @@ write.table(
 cat("[4/6] Drawing within-group heatmaps...\n")
 
 for (g in unique(c(opt[["group-y"]], opt[["group-x"]]))) {
-  g_samples <- map_df[[g]]
-  g_samples <- g_samples[!is.na(g_samples) & g_samples %in% ids]
-  g_samples <- unique(g_samples)
+  if (g == opt[["group-y"]]) {
+    g_resolved <- resolve_group_ids(map_df, g, opt[["group-y-match-col"]], opt[["group-y-match-mode"]])
+  } else if (g == opt[["group-x"]]) {
+    g_resolved <- resolve_group_ids(map_df, g, opt[["group-x-match-col"]], opt[["group-x-match-mode"]])
+  } else {
+    g_resolved <- resolve_group_ids(map_df, g, "", "direct")
+  }
 
-  if (length(g_samples) < 2) {
+  keep_g <- !is.na(g_resolved$label) & !is.na(g_resolved$match) & (g_resolved$match %in% ids)
+  g_df <- data.frame(label = g_resolved$label[keep_g], match = g_resolved$match[keep_g], stringsAsFactors = FALSE)
+  g_df <- g_df[!duplicated(g_df$match), , drop = FALSE]
+
+  if (nrow(g_df) < 2) {
     cat("Skip self-heatmap for group", g, ": fewer than 2 valid samples.\n")
     next
   }
 
-  self_mat <- mat[g_samples, g_samples, drop = FALSE]
+  self_mat <- mat[g_df$match, g_df$match, drop = FALSE]
+  rownames(self_mat) <- g_df$label
+  colnames(self_mat) <- g_df$label
   pdf_file <- file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_Self_", g, ".pdf"))
   draw_heatmap(
     self_mat,
     pdf_file,
     paste(opt[["prefix"]], "Internal IBS:", g),
-    show_values = length(g_samples) <= 80
+    show_values = nrow(g_df) <= 80
   )
 }
 

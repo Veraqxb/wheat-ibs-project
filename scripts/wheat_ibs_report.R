@@ -175,6 +175,14 @@ draw_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", show_values
       val <- sub_mat[j, i]
       plot_y <- ny - j + 1
 
+      if (is.na(val)) {
+        rect(i - 0.5, plot_y - 0.5, i + 0.5, plot_y + 0.5, col = "grey85", border = "grey60", lwd = 0.8)
+        if (show_values) {
+          text(i, plot_y, "NA", cex = 0.55, col = "black")
+        }
+        next
+      }
+
       if (isTRUE(all.equal(val, 1, tolerance = 1e-8))) {
         rect(i - 0.5, plot_y - 0.5, i + 0.5, plot_y + 0.5, border = "black", lwd = 2.8)
         points(i, plot_y, pch = 8, cex = 1.1, col = "black")
@@ -278,6 +286,15 @@ for (i in seq_len(nrow(pair_summary))) {
 
   vals <- as.numeric(mat[sample_y_match, cols_x_match])
   names(vals) <- cols_x_label
+  if (all(is.na(vals))) {
+    pair_summary$ibs_expected[i] <- NA_real_
+    pair_summary$best_x[i] <- NA_character_
+    pair_summary$ibs_best[i] <- NA_real_
+    pair_summary$second_best[i] <- NA_real_
+    pair_summary$margin[i] <- NA_real_
+    pair_summary$status[i] <- "NO_DATA"
+    next
+  }
   ord <- order(vals, decreasing = TRUE, na.last = TRUE)
   best_idx <- ord[1]
   second_idx <- if (length(ord) >= 2) ord[2] else ord[1]
@@ -286,8 +303,8 @@ for (i in seq_len(nrow(pair_summary))) {
   pair_summary$best_x[i] <- names(vals)[best_idx]
   pair_summary$ibs_best[i] <- vals[best_idx]
   pair_summary$second_best[i] <- vals[second_idx]
-  pair_summary$margin[i] <- vals[best_idx] - vals[second_idx]
-  pair_summary$status[i] <- ifelse(expected_x == pair_summary$best_x[i], "MATCH", "MISMATCH")
+  pair_summary$margin[i] <- ifelse(is.na(vals[best_idx]) || is.na(vals[second_idx]), NA_real_, vals[best_idx] - vals[second_idx])
+  pair_summary$status[i] <- ifelse(is.na(pair_summary$best_x[i]), "NO_DATA", ifelse(expected_x == pair_summary$best_x[i], "MATCH", "MISMATCH"))
 }
 
 write.table(
@@ -306,6 +323,7 @@ summary_df <- data.frame(
   valid_pairs_used = nrow(valid_map),
   matched_pair_count = sum(pair_summary$status == "MATCH"),
   mismatched_pair_count = sum(pair_summary$status == "MISMATCH"),
+  no_data_pair_count = sum(pair_summary$status == "NO_DATA"),
   stringsAsFactors = FALSE
 )
 
@@ -364,3 +382,4 @@ cat("Available map columns:", paste(available_cols, collapse = ", "), "\n")
 cat("Valid pairs used:", nrow(valid_map), "\n")
 cat("MATCH:", sum(pair_summary$status == "MATCH"), "\n")
 cat("MISMATCH:", sum(pair_summary$status == "MISMATCH"), "\n")
+cat("NO_DATA:", sum(pair_summary$status == "NO_DATA"), "\n")

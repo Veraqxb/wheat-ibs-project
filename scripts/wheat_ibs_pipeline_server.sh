@@ -32,12 +32,15 @@ Optional variables:
   GROUP_Y_MATCH_COL   optional map column used to match IBS IDs for GROUP_Y
   GROUP_X_MATCH_MODE  optional transform mode for GROUP_X direct IDs
   GROUP_Y_MATCH_MODE  optional transform mode for GROUP_Y direct IDs
+  PLOT_MODE           optional report mode, e.g. dna or rna
+  MATCH_THRESHOLD     optional report match threshold
+  ALERT_THRESHOLD     optional report alert threshold
   MIN_MAC             default 2
   MAX_GENO            default 0.2
   HIGH_HET_THRESHOLD  default 0.05
   IBS_ZMIN            default 0.7
   IBS_ZMAX            default 1.0
-  COPY_MODE           default copy; can be copy or link
+  COPY_MODE           default link; can be copy or link
 EOF
 }
 
@@ -68,7 +71,7 @@ MAX_GENO="${MAX_GENO:-0.2}"
 HIGH_HET_THRESHOLD="${HIGH_HET_THRESHOLD:-0.05}"
 IBS_ZMIN="${IBS_ZMIN:-0.7}"
 IBS_ZMAX="${IBS_ZMAX:-1.0}"
-COPY_MODE="${COPY_MODE:-copy}"
+COPY_MODE="${COPY_MODE:-link}"
 CHR_LIST="${CHR_LIST:-}"
 GROUP_MODE="${GROUP_MODE:-}"
 PLOIDY_TAG="${PLOIDY_TAG:-}"
@@ -77,6 +80,25 @@ GROUP_X_MATCH_COL="${GROUP_X_MATCH_COL:-}"
 GROUP_Y_MATCH_COL="${GROUP_Y_MATCH_COL:-}"
 GROUP_X_MATCH_MODE="${GROUP_X_MATCH_MODE:-direct}"
 GROUP_Y_MATCH_MODE="${GROUP_Y_MATCH_MODE:-direct}"
+PLOT_MODE="${PLOT_MODE:-}"
+MATCH_THRESHOLD="${MATCH_THRESHOLD:-}"
+ALERT_THRESHOLD="${ALERT_THRESHOLD:-0.85}"
+
+if [[ -z "$PLOT_MODE" ]]; then
+  if [[ "$GROUP_MODE" == "5group" ]]; then
+    PLOT_MODE="rna"
+  else
+    PLOT_MODE="dna"
+  fi
+fi
+
+if [[ -z "$MATCH_THRESHOLD" ]]; then
+  if [[ "$GROUP_MODE" == "5group" ]]; then
+    MATCH_THRESHOLD="0.90"
+  else
+    MATCH_THRESHOLD="0.99"
+  fi
+fi
 
 PIPELINE_DIR="$WORK_ROOT"
 INPUT_DIR="${PIPELINE_DIR}/01_input_vcf"
@@ -160,8 +182,21 @@ prepare_vcfs() {
   mapfile -t gz_vcfs < <(collect_expected_vcfs "$VCF_SOURCE_DIR" "vcf.gz")
   [[ ${#gz_vcfs[@]} -gt 0 ]] || { echo "No expected chromosome .vcf.gz files found after compression" >&2; exit 1; }
 
-  log "Indexing source VCF files"
-  printf '%s\n' "${gz_vcfs[@]}" | "$PARALLEL_BIN" -j "$THREADS_PARALLEL" "$BCFTOOLS_BIN" index -f {}
+  log "Checking source VCF indexes"
+  missing_index_vcfs=()
+  local vcf
+  for vcf in "${gz_vcfs[@]}"; do
+    if [[ ! -f "${vcf}.csi" && ! -f "${vcf}.tbi" ]]; then
+      missing_index_vcfs+=("$vcf")
+    fi
+  done
+
+  if [[ ${#missing_index_vcfs[@]} -gt 0 ]]; then
+    log "Indexing ${#missing_index_vcfs[@]} source VCF files missing indexes"
+    printf '%s\n' "${missing_index_vcfs[@]}" | "$PARALLEL_BIN" -j "$THREADS_PARALLEL" "$BCFTOOLS_BIN" index -f {}
+  else
+    log "All source VCF files already indexed; skipping re-index"
+  fi
 
   log "Collecting VCF files into analysis directory"
   rm -f "${INPUT_DIR}"/*.vcf.gz "${INPUT_DIR}"/*.vcf.gz.csi "${INPUT_DIR}"/*.vcf.gz.tbi "${INPUT_DIR}/vcf.list" 2>/dev/null || true
@@ -190,6 +225,11 @@ prepare_vcfs() {
 }
 
 concat_vcfs() {
+  if [[ -f "$MERGED_VCF" && ( -f "${MERGED_VCF}.csi" || -f "${MERGED_VCF}.tbi" ) ]]; then
+    log "Merged VCF already exists; skipping concatenation"
+    return
+  fi
+
   log "Concatenating chromosome VCF files"
 
   (
@@ -205,32 +245,58 @@ concat_vcfs() {
     fi
     [[ -s vcf.list ]] || { echo "No chromosome VCF files found in $INPUT_DIR" >&2; exit 1; }
 
-    "$BCFTOOLS_BIN" concat -f vcf.list -Oz -o "$MERGED_VCF" 2> "$CONCAT_ERR_LOG"
+    "$BCFTOOLS_BIN" concat --threads "$THREADS_PARALLEL" -f vcf.list -Oz -o "$MERGED_VCF" 2> "$CONCAT_ERR_LOG"
   )
 
   run_cmd "$BCFTOOLS_BIN" index -f "$MERGED_VCF"
 }
 
 filter_vcf() {
+  if [[ -f "$BI_VCF" && ( -f "${BI_VCF}.csi" || -f "${BI_VCF}.tbi" ) ]]; then
+    log "Filtered VCF already exists; skipping SNP filter"
+    return
+  fi
+
   log "Filtering SNPs: bi-allelic and MAC >= ${MIN_MAC}"
-  run_cmd "$BCFTOOLS_BIN" view -m2 -M2 -v snps -i "MAC>=${MIN_MAC}" "$MERGED_VCF" -Oz -o "$BI_VCF"
+  run_cmd "$BCFTOOLS_BIN" view --threads "$THREADS_PARALLEL" -m2 -M2 -v snps -i "MAC>=${MIN_MAC}" "$MERGED_VCF" -Oz -o "$BI_VCF"
   run_cmd "$TABIX_BIN" -f -p vcf "$BI_VCF"
 }
 
 run_plink_qc() {
+  if [[ -f "${PLINK_FINAL}.mibs" && -f "${PLINK_FINAL}.mibs.id" ]]; then
+    log "PLINK IBS outputs already exist; skipping PLINK QC and distance calculation"
+    return
+  fi
+
   log "Converting VCF to PLINK bed"
-  run_cmd "$PLINK_BIN" --vcf "$BI_VCF" --make-bed --chr-set "$CHR_SET" --out "$PLINK_RAW" --double-id
+  if [[ ! -f "${PLINK_RAW}.bed" || ! -f "${PLINK_RAW}.bim" || ! -f "${PLINK_RAW}.fam" ]]; then
+    run_cmd "$PLINK_BIN" --vcf "$BI_VCF" --make-bed --chr-set "$CHR_SET" --out "$PLINK_RAW" --double-id
+  else
+    log "PLINK raw bed already exists; skipping VCF to PLINK conversion"
+  fi
 
   log "Filtering variants by missing rate: --geno ${MAX_GENO}"
-  run_cmd "$PLINK_BIN" --bfile "$PLINK_RAW" --chr-set "$CHR_SET" --geno "$MAX_GENO" --make-bed --out "$PLINK_QC1"
+  if [[ ! -f "${PLINK_QC1}.bed" || ! -f "${PLINK_QC1}.bim" || ! -f "${PLINK_QC1}.fam" ]]; then
+    run_cmd "$PLINK_BIN" --bfile "$PLINK_RAW" --chr-set "$CHR_SET" --geno "$MAX_GENO" --make-bed --out "$PLINK_QC1"
+  else
+    log "PLINK geno-filtered bed already exists; skipping missing-rate filter"
+  fi
 
   log "Calculating Hardy-Weinberg statistics"
-  run_cmd "$PLINK_BIN" --bfile "$PLINK_QC1" --chr-set "$CHR_SET" --hardy --out "${PLINK_DIR}/${PREFIX}.hardy"
+  if [[ ! -f "${PLINK_DIR}/${PREFIX}.hardy.hwe" ]]; then
+    run_cmd "$PLINK_BIN" --bfile "$PLINK_QC1" --chr-set "$CHR_SET" --hardy --out "${PLINK_DIR}/${PREFIX}.hardy"
+  else
+    log "Hardy-Weinberg statistics already exist; skipping recalculation"
+  fi
 
   awk -v thr="$HIGH_HET_THRESHOLD" 'NR>1 && $7 > thr {print $2}' "${PLINK_DIR}/${PREFIX}.hardy.hwe" > "${PLINK_DIR}/${PREFIX}.high_het_snps.txt"
 
   log "Removing high-heterozygosity SNPs"
-  run_cmd "$PLINK_BIN" --bfile "$PLINK_QC1" --chr-set "$CHR_SET" --exclude "${PLINK_DIR}/${PREFIX}.high_het_snps.txt" --make-bed --out "$PLINK_FINAL"
+  if [[ ! -f "${PLINK_FINAL}.bed" || ! -f "${PLINK_FINAL}.bim" || ! -f "${PLINK_FINAL}.fam" ]]; then
+    run_cmd "$PLINK_BIN" --bfile "$PLINK_QC1" --chr-set "$CHR_SET" --exclude "${PLINK_DIR}/${PREFIX}.high_het_snps.txt" --make-bed --out "$PLINK_FINAL"
+  else
+    log "PLINK final QC bed already exists; skipping high-heterozygosity exclusion"
+  fi
 
   log "Calculating IBS matrix"
   run_cmd "$PLINK_BIN" --bfile "$PLINK_FINAL" --distance ibs square --chr-set "$CHR_SET" --out "$PLINK_FINAL"
@@ -248,6 +314,9 @@ run_report() {
     --group-x-match-col "$GROUP_X_MATCH_COL" \
     --group-y-match-mode "$GROUP_Y_MATCH_MODE" \
     --group-x-match-mode "$GROUP_X_MATCH_MODE" \
+    --plot-mode "$PLOT_MODE" \
+    --match-threshold "$MATCH_THRESHOLD" \
+    --alert-threshold "$ALERT_THRESHOLD" \
     --outdir "$REPORT_DIR" \
     --prefix "$PREFIX" \
     --zmin "$IBS_ZMIN" \

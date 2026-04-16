@@ -212,6 +212,14 @@ resolve_rna_source <- function(df, src) {
   out$rna_margin <- ifelse(out$rna_status == "MATCH_B25", out$b25_margin, out$z23_margin)
   out$rna_high_match_ids <- ifelse(out$rna_status == "MATCH_B25", out$b25_high_match_ids, out$z23_high_match_ids)
   out$rna_duplicate_ids <- ifelse(out$rna_status == "MATCH_B25", out$b25_duplicate_ids, out$z23_duplicate_ids)
+  out$rna_support_call <- ifelse(
+    out$rna_status == "MATCH_Z23", "SUPPORT_Z23",
+    ifelse(out$rna_status == "MATCH_B25", "B25_RESCUE",
+      ifelse(out$rna_status == "SWAPPED", "OTHER_TARGET",
+        ifelse(out$rna_status == "NO_DATA", "NO_DATA", "UNSUPPORTED")
+      )
+    )
+  )
   out
 }
 
@@ -244,6 +252,7 @@ rna_audit_long <- do.call(
       b25_margin = det$b25_margin,
       b25_high_match_ids = det$b25_high_match_ids,
       b25_duplicate_ids = det$b25_duplicate_ids,
+      support_call = det$rna_support_call,
       complete_mismatch = ifelse(det$z23_status == "MISMATCH" & det$b25_status == "MISMATCH", "YES", "NO"),
       stringsAsFactors = FALSE
     )
@@ -273,6 +282,32 @@ base_df$rna_status <- apply(
       "NO_DATA"
     } else {
       "MISMATCH"
+    }
+  }
+)
+
+base_df$dna_primary_call <- ifelse(
+  base_df$dna_status == "MATCH", "CONFIRMED_Z23",
+  ifelse(base_df$dna_status == "SWAPPED", "SWAPPED_Z23",
+    ifelse(base_df$dna_status == "NO_DATA" | is.na(base_df$dna_status), "NO_DATA", "UNSUPPORTED")
+  )
+)
+base_df$dna_duplicate_flag <- ifelse(base_df$dna_match_type == "2_Clonal_Match", "YES", "NO")
+
+base_df$rna_support_call <- apply(
+  do.call(cbind, lapply(rna_details, function(x) x$rna_support_call)),
+  1,
+  function(x) {
+    if (any(x == "SUPPORT_Z23", na.rm = TRUE)) {
+      "SUPPORT_Z23"
+    } else if (any(x == "B25_RESCUE", na.rm = TRUE)) {
+      "B25_RESCUE"
+    } else if (any(x == "OTHER_TARGET", na.rm = TRUE)) {
+      "OTHER_TARGET"
+    } else if (all(is.na(x) | x == "NO_DATA")) {
+      "NO_DATA"
+    } else {
+      "UNSUPPORTED"
     }
   }
 )
@@ -354,6 +389,17 @@ base_df$final_decision <- ifelse(
   )
 )
 
+base_df$final_support_class <- ifelse(
+  base_df$dna_primary_call == "CONFIRMED_Z23", "KEEP_Z23",
+  ifelse(base_df$rna_support_call == "B25_RESCUE", "KEEP_B25_RESCUE",
+    ifelse(base_df$dna_primary_call == "SWAPPED_Z23" | base_df$rna_support_call == "OTHER_TARGET", "REVIEW_SWAP",
+      ifelse(base_df$rna_support_call == "SUPPORT_Z23", "REVIEW_CONFLICT",
+        ifelse(base_df$dna_primary_call == "NO_DATA" & base_df$rna_support_call == "NO_DATA", "NO_DATA", "REMOVE")
+      )
+    )
+  )
+)
+
 base_df$action <- ifelse(
   base_df$final_decision == "KEEP", "keep",
   ifelse(base_df$final_decision == "RESEQ", "keep_for_reseq",
@@ -374,9 +420,9 @@ base_df$comment <- ifelse(
 
 final_cols <- c(
   "sample_id", "ploidy", "dataset", "expected_z23", "expected_b25", "expected_tc", "expected_sc", "expected_fc",
-  "dna_best_match", "dna_ibs_expected", "dna_ibs_best", "dna_second_match", "dna_second_best", "dna_third_match", "dna_third_best", "dna_margin", "dna_high_match_count", "dna_high_match_ids", "dna_duplicate_ids", "dna_match_type", "dna_status",
-  "rna_source", "rna_best_match", "rna_second_match", "rna_third_match", "rna_ibs_expected", "rna_margin", "rna_high_match_ids", "rna_duplicate_ids", "rna_status",
-  "final_decision", "action", "comment"
+  "dna_best_match", "dna_ibs_expected", "dna_ibs_best", "dna_second_match", "dna_second_best", "dna_third_match", "dna_third_best", "dna_margin", "dna_high_match_count", "dna_high_match_ids", "dna_duplicate_ids", "dna_match_type", "dna_primary_call", "dna_duplicate_flag", "dna_status",
+  "rna_source", "rna_best_match", "rna_second_match", "rna_third_match", "rna_ibs_expected", "rna_margin", "rna_high_match_ids", "rna_duplicate_ids", "rna_status", "rna_support_call",
+  "final_support_class", "final_decision", "action", "comment"
 )
 final_df <- base_df[, final_cols, drop = FALSE]
 
@@ -396,6 +442,10 @@ summary_df <- data.frame(
   remove_count = sum(final_df$final_decision == "REMOVE"),
   no_data_count = sum(final_df$final_decision == "NO_DATA"),
   final_retained_count = sum(final_df$final_decision %in% c("KEEP", "RESEQ")),
+  keep_z23_count = sum(final_df$final_support_class == "KEEP_Z23", na.rm = TRUE),
+  keep_b25_rescue_count = sum(final_df$final_support_class == "KEEP_B25_RESCUE", na.rm = TRUE),
+  review_swap_count = sum(final_df$final_support_class == "REVIEW_SWAP", na.rm = TRUE),
+  review_conflict_count = sum(final_df$final_support_class == "REVIEW_CONFLICT", na.rm = TRUE),
   stringsAsFactors = FALSE
 )
 write.table(summary_df, file = file.path(outdir, paste0(prefix, "_final_summary.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
@@ -406,6 +456,10 @@ dna_summary_df <- data.frame(
   dna_swapped_count = sum(final_df$dna_status == "SWAPPED", na.rm = TRUE),
   dna_mismatch_count = sum(final_df$dna_status == "MISMATCH", na.rm = TRUE),
   dna_no_data_count = sum(final_df$dna_status == "NO_DATA" | is.na(final_df$dna_status), na.rm = TRUE),
+  confirmed_z23_count = sum(final_df$dna_primary_call == "CONFIRMED_Z23", na.rm = TRUE),
+  swapped_z23_count = sum(final_df$dna_primary_call == "SWAPPED_Z23", na.rm = TRUE),
+  unsupported_count = sum(final_df$dna_primary_call == "UNSUPPORTED", na.rm = TRUE),
+  no_data_primary_count = sum(final_df$dna_primary_call == "NO_DATA", na.rm = TRUE),
   dna_duplicate_pair_count = sum(!is.na(final_df$dna_duplicate_ids) & final_df$dna_duplicate_ids != "", na.rm = TRUE),
   stringsAsFactors = FALSE
 )
@@ -432,6 +486,11 @@ rna_source_summary_df <- do.call(
       total_samples = nrow(sub_df),
       z23_match_count = sum(sub_df$z23_status == "MATCH", na.rm = TRUE),
       b25_match_count = sum(sub_df$b25_status == "MATCH", na.rm = TRUE),
+      support_z23_count = sum(sub_df$support_call == "SUPPORT_Z23", na.rm = TRUE),
+      b25_rescue_count = sum(sub_df$support_call == "B25_RESCUE", na.rm = TRUE),
+      other_target_count = sum(sub_df$support_call == "OTHER_TARGET", na.rm = TRUE),
+      unsupported_count = sum(sub_df$support_call == "UNSUPPORTED", na.rm = TRUE),
+      no_data_count = sum(sub_df$support_call == "NO_DATA", na.rm = TRUE),
       complete_mismatch_count = sum(sub_df$complete_mismatch == "YES", na.rm = TRUE),
       stringsAsFactors = FALSE
     )
@@ -521,20 +580,13 @@ draw_issue_heatmap <- function(mat, file, title) {
 
 draw_dna_class_heatmap <- function(final_df, out_file, title) {
   if (!requireNamespace("ggplot2", quietly = TRUE) || nrow(final_df) == 0) return(invisible(NULL))
-  type_levels <- c(
-    "1_Unique_Match",
-    "2_Clonal_Match",
-    "3_Swapped_Mismatch",
-    "4_True_Mismatch",
-    "5_No_Data"
-  )
-  type_labels <- c("Unique", "Clonal", "Swapped", "TrueMismatch", "NoData")
+  type_levels <- c("CONFIRMED_Z23", "SWAPPED_Z23", "UNSUPPORTED", "NO_DATA")
+  type_labels <- c("Confirmed", "Swapped", "Unsupported", "NoData")
   type_colors <- c(
-    "1_Unique_Match" = "#0072B2",
-    "2_Clonal_Match" = "#009E73",
-    "3_Swapped_Mismatch" = "#D55E00",
-    "4_True_Mismatch" = "#BDBDBD",
-    "5_No_Data" = "#000000",
+    "CONFIRMED_Z23" = "#2c7fb8",
+    "SWAPPED_Z23" = "#D55E00",
+    "UNSUPPORTED" = "#d64545",
+    "NO_DATA" = "#7f7f7f",
     "inactive" = "#FFFFFF"
   )
   plot_df <- do.call(
@@ -543,10 +595,14 @@ draw_dna_class_heatmap <- function(final_df, out_file, title) {
       data.frame(
         sample_id = final_df$sample_id[i],
         category = factor(type_levels, levels = type_levels),
-        fill_group = ifelse(type_levels == final_df$dna_match_type[i], type_levels, "inactive"),
+        fill_group = ifelse(type_levels == final_df$dna_primary_call[i], type_levels, "inactive"),
         label = ifelse(
-          type_levels == final_df$dna_match_type[i],
-          paste0(final_df$dna_best_match[i] %||% "", ifelse(is.na(final_df$dna_ibs_best[i]), "", sprintf("\n%.3f", final_df$dna_ibs_best[i]))),
+          type_levels == final_df$dna_primary_call[i],
+          paste0(
+            final_df$dna_best_match[i] %||% "",
+            ifelse(is.na(final_df$dna_ibs_best[i]), "", sprintf("\n%.3f", final_df$dna_ibs_best[i])),
+            ifelse(final_df$dna_duplicate_flag[i] == "YES", "\n[dup]", "")
+          ),
           ""
         ),
         stringsAsFactors = FALSE
@@ -571,7 +627,7 @@ draw_dna_class_heatmap <- function(final_df, out_file, title) {
       ggplot2::scale_x_discrete(labels = type_labels) +
       ggplot2::labs(
         title = title,
-        subtitle = "DNA genotype pairing classes for each sample",
+        subtitle = "Z23-centered DNA classes; duplicated high-IBS pairs are marked with [dup]",
         x = "",
         y = ""
       ) +
@@ -596,18 +652,14 @@ draw_rna_target_heatmap <- function(rna_audit_long, out_file, title) {
     "NO_DATA" = "#7f7f7f",
     "MATCH_Z23" = "#2c7fb8",
     "MATCH_B25" = "#41ab5d",
+    "SUPPORT_Z23" = "#2c7fb8",
+    "B25_RESCUE" = "#41ab5d",
+    "OTHER_TARGET" = "#e68a2e",
+    "UNSUPPORTED" = "#d64545",
     "blank" = "#FFFFFF"
   )
 
-  overall_status <- ifelse(
-    rna_audit_long$z23_status == "MATCH", "MATCH_Z23",
-    ifelse(rna_audit_long$b25_status == "MATCH", "MATCH_B25",
-      ifelse(rna_audit_long$z23_status == "SWAPPED" | rna_audit_long$b25_status == "SWAPPED", "SWAPPED",
-        ifelse((is.na(rna_audit_long$z23_status) | rna_audit_long$z23_status == "NO_DATA") &
-                 (is.na(rna_audit_long$b25_status) | rna_audit_long$b25_status == "NO_DATA"), "NO_DATA", "MISMATCH")
-      )
-    )
-  )
+  overall_status <- rna_audit_long$support_call
 
   plot_df <- rbind(
     data.frame(
@@ -645,7 +697,7 @@ draw_rna_target_heatmap <- function(rna_audit_long, out_file, title) {
       ggplot2::scale_fill_manual(values = status_colors, guide = "none") +
       ggplot2::labs(
         title = title,
-        subtitle = "RNA samples are first checked against Z23, then unresolved samples are checked against B25",
+        subtitle = "RNA is judged against Z23 first; only unresolved samples use B25 rescue",
         x = "",
         y = ""
       ) +

@@ -406,26 +406,13 @@ draw_match_type_heatmap <- function(pair_summary, out_file, title) {
     return(invisible(NULL))
   }
 
-  type_levels <- c(
-    "1_Unique_Match",
-    "2_Clonal_Match",
-    "3_Swapped_Mismatch",
-    "4_True_Mismatch",
-    "5_No_Data"
-  )
-  type_labels <- c(
-    "Unique",
-    "Clonal",
-    "Swapped",
-    "TrueMismatch",
-    "NoData"
-  )
+  type_levels <- c("CONFIRMED_Z23", "SWAPPED_Z23", "UNSUPPORTED", "NO_DATA")
+  type_labels <- c("Confirmed", "Swapped", "Unsupported", "NoData")
   type_colors <- c(
-    "1_Unique_Match" = "#0072B2",
-    "2_Clonal_Match" = "#009E73",
-    "3_Swapped_Mismatch" = "#D55E00",
-    "4_True_Mismatch" = "#BDBDBD",
-    "5_No_Data" = "#000000"
+    "CONFIRMED_Z23" = "#2c7fb8",
+    "SWAPPED_Z23" = "#D55E00",
+    "UNSUPPORTED" = "#d64545",
+    "NO_DATA" = "#7f7f7f"
   )
 
   plot_df <- do.call(
@@ -434,10 +421,14 @@ draw_match_type_heatmap <- function(pair_summary, out_file, title) {
       data.frame(
         sample_y = pair_summary$sample_y[i],
         category = factor(type_levels, levels = type_levels),
-        fill_group = ifelse(type_levels == pair_summary$match_type[i], type_levels, "inactive"),
+        fill_group = ifelse(type_levels == pair_summary$primary_call[i], type_levels, "inactive"),
         label = ifelse(
-          type_levels == pair_summary$match_type[i],
-          paste0(pair_summary$best_x[i] %||% "", ifelse(is.na(pair_summary$ibs_best[i]), "", sprintf("\n%.3f", pair_summary$ibs_best[i]))),
+          type_levels == pair_summary$primary_call[i],
+          paste0(
+            pair_summary$best_x[i] %||% "",
+            ifelse(is.na(pair_summary$ibs_best[i]), "", sprintf("\n%.3f", pair_summary$ibs_best[i])),
+            ifelse(pair_summary$duplicate_flag[i] == "YES", "\n[dup]", "")
+          ),
           ""
         ),
         stringsAsFactors = FALSE
@@ -464,7 +455,7 @@ draw_match_type_heatmap <- function(pair_summary, out_file, title) {
       ggplot2::scale_x_discrete(labels = type_labels) +
       ggplot2::labs(
         title = title,
-        subtitle = "Each row marks the active DNA pairing class for one sample",
+        subtitle = "Z23-centered DNA call; duplicated high-IBS pairs are marked with [dup]",
         x = "",
         y = ""
       ) +
@@ -642,6 +633,14 @@ pair_summary$status <- ifelse(
   )
 )
 
+pair_summary$primary_call <- ifelse(
+  pair_summary$match_type %in% c("1_Unique_Match", "2_Clonal_Match"), "CONFIRMED_Z23",
+  ifelse(pair_summary$match_type == "3_Swapped_Mismatch", "SWAPPED_Z23",
+    ifelse(pair_summary$match_type == "5_No_Data", "NO_DATA", "UNSUPPORTED")
+  )
+)
+pair_summary$duplicate_flag <- ifelse(pair_summary$match_type == "2_Clonal_Match", "YES", "NO")
+
 summary_df <- data.frame(
   prefix = opt[["prefix"]],
   group_y = opt[["group-y"]],
@@ -656,6 +655,11 @@ summary_df <- data.frame(
   clonal_match_count = sum(pair_summary$match_type == "2_Clonal_Match", na.rm = TRUE),
   swapped_mismatch_count = sum(pair_summary$match_type == "3_Swapped_Mismatch", na.rm = TRUE),
   true_mismatch_count = sum(pair_summary$match_type == "4_True_Mismatch", na.rm = TRUE),
+  confirmed_z23_count = sum(pair_summary$primary_call == "CONFIRMED_Z23", na.rm = TRUE),
+  swapped_z23_count = sum(pair_summary$primary_call == "SWAPPED_Z23", na.rm = TRUE),
+  unsupported_count = sum(pair_summary$primary_call == "UNSUPPORTED", na.rm = TRUE),
+  no_data_count = sum(pair_summary$primary_call == "NO_DATA", na.rm = TRUE),
+  duplicate_pair_count = sum(pair_summary$duplicate_flag == "YES", na.rm = TRUE),
   stringsAsFactors = FALSE
 )
 

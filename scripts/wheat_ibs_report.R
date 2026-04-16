@@ -211,6 +211,67 @@ draw_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", show_values
   dev.off()
 }
 
+get_upper_triangle_values <- function(m) {
+  if (is.null(m) || nrow(m) < 2 || ncol(m) < 2) return(numeric(0))
+  m[lower.tri(m, diag = FALSE)]
+}
+
+build_distribution_df <- function(mat, valid_group_y, valid_group_x, pair_summary) {
+  y_ids <- unique(valid_group_y$match)
+  x_ids <- unique(valid_group_x$match)
+
+  y_ids <- y_ids[!is.na(y_ids) & y_ids %in% rownames(mat)]
+  x_ids <- x_ids[!is.na(x_ids) & x_ids %in% rownames(mat)]
+
+  y_internal <- numeric(0)
+  x_internal <- numeric(0)
+
+  if (length(y_ids) >= 2) {
+    y_mat <- mat[y_ids, y_ids, drop = FALSE]
+    y_internal <- get_upper_triangle_values(y_mat)
+    y_internal <- y_internal[!is.na(y_internal)]
+  }
+
+  if (length(x_ids) >= 2) {
+    x_mat <- mat[x_ids, x_ids, drop = FALSE]
+    x_internal <- get_upper_triangle_values(x_mat)
+    x_internal <- x_internal[!is.na(x_internal)]
+  }
+
+  paired_vals <- pair_summary$ibs_expected
+  paired_vals <- paired_vals[!is.na(paired_vals)]
+
+  cross_nonpair <- numeric(0)
+  if (length(valid_group_y$match) > 0 && length(valid_group_x$match) > 0) {
+    cross_mat <- mat[valid_group_y$match, valid_group_x$match, drop = FALSE]
+    diag(cross_mat) <- NA
+    cross_nonpair <- as.numeric(cross_mat)
+    cross_nonpair <- cross_nonpair[!is.na(cross_nonpair)]
+  }
+
+  dist_df <- data.frame(
+    IBS = c(y_internal, x_internal, paired_vals, cross_nonpair),
+    Category = c(
+      rep(paste0(opt[["group-y"]], "_internal"), length(y_internal)),
+      rep(paste0(opt[["group-x"]], "_internal"), length(x_internal)),
+      rep("paired_1to1", length(paired_vals)),
+      rep("cross_nonpaired", length(cross_nonpair))
+    ),
+    stringsAsFactors = FALSE
+  )
+
+  dist_df$Category <- factor(
+    dist_df$Category,
+    levels = c(
+      paste0(opt[["group-y"]], "_internal"),
+      paste0(opt[["group-x"]], "_internal"),
+      "paired_1to1",
+      "cross_nonpaired"
+    )
+  )
+  dist_df
+}
+
 cat("[2/6] Building cross-group matrix...\n")
 
 group_y <- resolve_group_ids(map_df, opt[["group-y"]], opt[["group-y-match-col"]], opt[["group-y-match-mode"]])
@@ -376,6 +437,164 @@ write.table(
   sep = "\t",
   row.names = FALSE
 )
+
+if (requireNamespace("ggplot2", quietly = TRUE)) {
+  cat("[6/8] Drawing raincloud and density distribution plots...\n")
+  library(ggplot2)
+  has_ggrepel <- requireNamespace("ggrepel", quietly = TRUE)
+
+  pair_summary$ibs_background <- NA_real_
+  for (i in seq_len(nrow(pair_summary))) {
+    sy <- pair_summary$sample_y_match[i]
+    other_y <- pair_summary$sample_y_match[-i]
+    other_y <- other_y[!is.na(other_y) & other_y %in% rownames(mat)]
+    if (length(other_y) > 0 && sy %in% rownames(mat)) {
+      pair_summary$ibs_background[i] <- mean(mat[sy, other_y], na.rm = TRUE)
+    }
+  }
+
+  pair_summary$match_type <- ifelse(
+    pair_summary$status == "MATCH" & !is.na(pair_summary$ibs_expected) & pair_summary$ibs_expected >= 0.99 & !is.na(pair_summary$margin) & pair_summary$margin >= 0.01,
+    "1_Unique_Match",
+    ifelse(
+      pair_summary$status == "MATCH" & !is.na(pair_summary$ibs_expected) & pair_summary$ibs_expected >= 0.99,
+      "2_Clonal_Match",
+      ifelse(
+        pair_summary$status == "MISMATCH" & !is.na(pair_summary$ibs_best) & pair_summary$ibs_best >= 0.99,
+        "3_Swapped_Mismatch",
+        ifelse(pair_summary$status == "NO_DATA", "5_No_Data", "4_True_Mismatch")
+      )
+    )
+  )
+
+  rain_df <- data.frame(
+    Sample = rep(pair_summary$sample_y, 2),
+    Type = factor(rep(c("Internal Background", "Paired Match"), each = nrow(pair_summary)),
+                  levels = c("Internal Background", "Paired Match")),
+    IBS = c(pair_summary$ibs_background, pair_summary$ibs_expected),
+    Match_Type = rep(pair_summary$match_type, 2),
+    stringsAsFactors = FALSE
+  )
+  rain_df <- rain_df[!is.na(rain_df$IBS), , drop = FALSE]
+
+  if (nrow(rain_df) > 0) {
+    c_unique <- sum(pair_summary$match_type == "1_Unique_Match", na.rm = TRUE)
+    c_clone_in <- sum(pair_summary$match_type == "2_Clonal_Match", na.rm = TRUE)
+    c_clone_out <- sum(pair_summary$match_type == "3_Swapped_Mismatch", na.rm = TRUE)
+    c_mismatch <- sum(pair_summary$match_type == "4_True_Mismatch", na.rm = TRUE)
+    c_nodata <- sum(pair_summary$match_type == "5_No_Data", na.rm = TRUE)
+
+    stat_text <- sprintf(
+      "Sample Pairing Audit\n(IBS Threshold = 0.99)\n------------------------------\n[1] Unique Match (Blue): %d\n[2] Clonal Match (Green): %d\n[3] Swapped Mismatch (Orange): %d\n[4] True Mismatch (Grey): %d\n[5] No Data (Black): %d",
+      c_unique, c_clone_in, c_clone_out, c_mismatch, c_nodata
+    )
+
+    df_mismatch <- rain_df[rain_df$Match_Type %in% c("4_True_Mismatch", "5_No_Data"), , drop = FALSE]
+    df_colored <- rain_df[rain_df$Match_Type %in% c("1_Unique_Match", "2_Clonal_Match", "3_Swapped_Mismatch"), , drop = FALSE]
+    df_alert <- rain_df[rain_df$IBS < 0.85 & rain_df$Type == "Paired Match", , drop = FALSE]
+
+    min_y <- min(0.8, min(rain_df$IBS, na.rm = TRUE))
+    max_y <- max(rain_df$IBS, na.rm = TRUE)
+    y_range <- max_y - min_y
+
+    p_rain <- ggplot() +
+      geom_violin(data = rain_df, aes(x = Type, y = IBS, fill = Type), trim = FALSE, alpha = 0.2, color = NA, width = 0.6) +
+      geom_boxplot(data = rain_df, aes(x = Type, y = IBS, fill = Type), width = 0.15, outlier.shape = NA, alpha = 0.4, color = "black") +
+      geom_line(data = df_mismatch, aes(x = Type, y = IBS, group = Sample), color = "grey80", alpha = 0.5, linewidth = 0.4) +
+      geom_line(data = df_colored, aes(x = Type, y = IBS, group = Sample, color = Match_Type), linewidth = 0.9, alpha = 0.8) +
+      geom_point(data = df_mismatch, aes(x = Type, y = IBS), fill = "grey75", color = "grey85", size = 2, alpha = 0.5, shape = 21) +
+      geom_point(data = df_colored, aes(x = Type, y = IBS, fill = Type), size = 2.5, alpha = 0.9, shape = 21, color = "white") +
+      geom_hline(yintercept = 0.85, color = "#d73027", linetype = "dashed", linewidth = 0.8, alpha = 0.7) +
+      annotate("text", x = 1.5, y = 0.85, label = "IBS = 0.85 Alert Baseline", color = "#d73027", vjust = -0.6, fontface = "bold", size = 4)
+
+    if (nrow(df_alert) > 0) {
+      if (has_ggrepel) {
+        p_rain <- p_rain + ggrepel::geom_text_repel(
+          data = df_alert, aes(x = Type, y = IBS, label = Sample),
+          color = "#d73027", fontface = "bold", size = 3.5,
+          nudge_x = -0.15, direction = "y", segment.color = "grey50"
+        )
+      } else {
+        p_rain <- p_rain + geom_text(
+          data = df_alert, aes(x = Type, y = IBS, label = Sample),
+          color = "#d73027", fontface = "bold", size = 3.5, vjust = 1.5, hjust = 1.1
+        )
+      }
+    }
+
+    p_rain <- p_rain +
+      annotate("label", x = 2.5, y = max_y - (y_range * 0.05), label = stat_text,
+               hjust = 0, vjust = 1, fill = "#f8f9fa", color = "black",
+               label.size = 0.8, fontface = "bold", size = 4.3, alpha = 0.9) +
+      theme_bw(base_size = 15) +
+      labs(
+        title = paste("Raincloud IBS Audit:", opt[["prefix"]]),
+        subtitle = "Internal background vs paired 1-to-1 match; colored by 4-type classification",
+        x = "", y = "Identity By State (IBS) Score"
+      ) +
+      scale_fill_manual(values = c("Internal Background" = "#4575b4", "Paired Match" = "#fdae61")) +
+      scale_color_manual(values = c(
+        "1_Unique_Match" = "#0072B2",
+        "2_Clonal_Match" = "#009E73",
+        "3_Swapped_Mismatch" = "#D55E00"
+      )) +
+      coord_cartesian(ylim = c(min(0.7, min_y - (y_range * 0.05)), max(1.0, max_y + (y_range * 0.05))), clip = "off") +
+      theme(
+        panel.border = element_blank(),
+        axis.line = element_line(color = "black", linewidth = 0.8),
+        legend.position = "none",
+        plot.title = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, color = "grey30", size = 11),
+        axis.text.x = element_text(face = "bold", color = "black", size = 13),
+        panel.grid.major.x = element_blank(),
+        plot.margin = margin(t = 15, r = 220, b = 15, l = 15)
+      )
+
+    rain_out <- file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_density_distribution.pdf"))
+    pdf(rain_out, width = 11.5, height = 7.5)
+    print(p_rain)
+    dev.off()
+  }
+
+  dist_df <- build_distribution_df(mat, valid_group_y, valid_group_x, pair_summary)
+  if (nrow(dist_df) > 0) {
+    density_cols <- c("#4575b4", "#74add1", "#d73027", "#fdae61")
+    names(density_cols) <- c(
+      paste0(opt[["group-y"]], "_internal"),
+      paste0(opt[["group-x"]], "_internal"),
+      "paired_1to1",
+      "cross_nonpaired"
+    )
+
+    p_density <- ggplot(dist_df, aes(x = IBS, color = Category, fill = Category)) +
+      geom_density(alpha = 0.18, linewidth = 1.2, adjust = 1.1) +
+      geom_vline(xintercept = 0.99, linetype = "dashed", color = "grey35", linewidth = 0.7) +
+      geom_vline(xintercept = 0.85, linetype = "dotted", color = "#d73027", linewidth = 0.7) +
+      scale_color_manual(values = density_cols) +
+      scale_fill_manual(values = density_cols) +
+      labs(
+        title = paste("IBS Density Comparison:", opt[["prefix"]]),
+        subtitle = "Within-group, paired 1-to-1, and cross-group non-paired IBS distributions",
+        x = "IBS",
+        y = "Density",
+        color = "Category",
+        fill = "Category"
+      ) +
+      theme_bw(base_size = 14) +
+      theme(
+        plot.title = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.position = "right",
+        panel.grid.minor = element_blank()
+      ) +
+      coord_cartesian(xlim = c(min(0.7, min(dist_df$IBS, na.rm = TRUE)), 1.0))
+
+    density_out <- file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_ibs_density_comparison.pdf"))
+    pdf(density_out, width = 9, height = 6.5)
+    print(p_density)
+    dev.off()
+  }
+}
 
 cat("[6/6] Report completed successfully.\n")
 cat("Available map columns:", paste(available_cols, collapse = ", "), "\n")

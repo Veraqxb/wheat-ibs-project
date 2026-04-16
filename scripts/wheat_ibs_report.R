@@ -30,6 +30,9 @@ opt[["group-y-match-col"]] <- opt[["group-y-match-col"]] %||% ""
 opt[["group-x-match-col"]] <- opt[["group-x-match-col"]] %||% ""
 opt[["group-y-match-mode"]] <- opt[["group-y-match-mode"]] %||% "direct"
 opt[["group-x-match-mode"]] <- opt[["group-x-match-mode"]] %||% "direct"
+opt[["plot-mode"]] <- opt[["plot-mode"]] %||% "dna"
+opt[["alert-threshold"]] <- opt[["alert-threshold"]] %||% "0.85"
+opt[["match-threshold"]] <- opt[["match-threshold"]] %||% if (opt[["plot-mode"]] == "rna") "0.90" else "0.99"
 
 dir.create(opt[["outdir"]], recursive = TRUE, showWarnings = FALSE)
 
@@ -127,6 +130,8 @@ rdylbu_cols <- colorRampPalette(rev(rdylbu_base))(100)
 
 zmin <- as.numeric(opt[["zmin"]])
 zmax <- as.numeric(opt[["zmax"]])
+match_threshold <- as.numeric(opt[["match-threshold"]])
+alert_threshold <- as.numeric(opt[["alert-threshold"]])
 
 apply_match_mode <- function(x, mode) {
   if (mode == "direct") return(x)
@@ -270,6 +275,33 @@ build_distribution_df <- function(mat, valid_group_y, valid_group_x, pair_summar
     )
   )
   dist_df
+}
+
+build_raincloud_df <- function(pair_summary, plot_mode, group_x_label, group_y_label) {
+  if (plot_mode == "dna") {
+    rain_df <- data.frame(
+      Sample = rep(pair_summary$sample_y, 3),
+      Type = factor(
+        rep(c(paste0(group_x_label, "_internal"), "paired_match", paste0(group_y_label, "_internal")), each = nrow(pair_summary)),
+        levels = c(paste0(group_x_label, "_internal"), "paired_match", paste0(group_y_label, "_internal"))
+      ),
+      IBS = c(pair_summary$ibs_x_background, pair_summary$ibs_expected, pair_summary$ibs_y_background),
+      Match_Type = rep(pair_summary$match_type, 3),
+      stringsAsFactors = FALSE
+    )
+  } else {
+    rain_df <- data.frame(
+      Sample = rep(pair_summary$sample_y, 2),
+      Type = factor(
+        rep(c("internal_background", "paired_match"), each = nrow(pair_summary)),
+        levels = c("internal_background", "paired_match")
+      ),
+      IBS = c(pair_summary$ibs_y_background, pair_summary$ibs_expected),
+      Match_Type = rep(pair_summary$match_type, 2),
+      stringsAsFactors = FALSE
+    )
+  }
+  rain_df[!is.na(rain_df$IBS), , drop = FALSE]
 }
 
 cat("[2/6] Building cross-group matrix...\n")
@@ -443,39 +475,38 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
   library(ggplot2)
   has_ggrepel <- requireNamespace("ggrepel", quietly = TRUE)
 
-  pair_summary$ibs_background <- NA_real_
+  pair_summary$ibs_y_background <- NA_real_
+  pair_summary$ibs_x_background <- NA_real_
   for (i in seq_len(nrow(pair_summary))) {
     sy <- pair_summary$sample_y_match[i]
+    sx <- pair_summary$expected_x_match[i]
     other_y <- pair_summary$sample_y_match[-i]
     other_y <- other_y[!is.na(other_y) & other_y %in% rownames(mat)]
     if (length(other_y) > 0 && sy %in% rownames(mat)) {
-      pair_summary$ibs_background[i] <- mean(mat[sy, other_y], na.rm = TRUE)
+      pair_summary$ibs_y_background[i] <- mean(mat[sy, other_y], na.rm = TRUE)
+    }
+    other_x <- pair_summary$expected_x_match[-i]
+    other_x <- other_x[!is.na(other_x) & other_x %in% rownames(mat)]
+    if (length(other_x) > 0 && sx %in% rownames(mat)) {
+      pair_summary$ibs_x_background[i] <- mean(mat[sx, other_x], na.rm = TRUE)
     }
   }
 
   pair_summary$match_type <- ifelse(
-    pair_summary$status == "MATCH" & !is.na(pair_summary$ibs_expected) & pair_summary$ibs_expected >= 0.99 & !is.na(pair_summary$margin) & pair_summary$margin >= 0.01,
+    pair_summary$status == "MATCH" & !is.na(pair_summary$ibs_expected) & pair_summary$ibs_expected >= match_threshold & !is.na(pair_summary$margin) & pair_summary$margin >= 0.01,
     "1_Unique_Match",
     ifelse(
-      pair_summary$status == "MATCH" & !is.na(pair_summary$ibs_expected) & pair_summary$ibs_expected >= 0.99,
+      pair_summary$status == "MATCH" & !is.na(pair_summary$ibs_expected) & pair_summary$ibs_expected >= match_threshold,
       "2_Clonal_Match",
       ifelse(
-        pair_summary$status == "MISMATCH" & !is.na(pair_summary$ibs_best) & pair_summary$ibs_best >= 0.99,
+        pair_summary$status == "MISMATCH" & !is.na(pair_summary$ibs_best) & pair_summary$ibs_best >= match_threshold,
         "3_Swapped_Mismatch",
         ifelse(pair_summary$status == "NO_DATA", "5_No_Data", "4_True_Mismatch")
       )
     )
   )
 
-  rain_df <- data.frame(
-    Sample = rep(pair_summary$sample_y, 2),
-    Type = factor(rep(c("Internal Background", "Paired Match"), each = nrow(pair_summary)),
-                  levels = c("Internal Background", "Paired Match")),
-    IBS = c(pair_summary$ibs_background, pair_summary$ibs_expected),
-    Match_Type = rep(pair_summary$match_type, 2),
-    stringsAsFactors = FALSE
-  )
-  rain_df <- rain_df[!is.na(rain_df$IBS), , drop = FALSE]
+  rain_df <- build_raincloud_df(pair_summary, opt[["plot-mode"]], opt[["group-x"]], opt[["group-y"]])
 
   if (nrow(rain_df) > 0) {
     c_unique <- sum(pair_summary$match_type == "1_Unique_Match", na.rm = TRUE)
@@ -485,13 +516,13 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
     c_nodata <- sum(pair_summary$match_type == "5_No_Data", na.rm = TRUE)
 
     stat_text <- sprintf(
-      "Sample Pairing Audit\n(IBS Threshold = 0.99)\n------------------------------\n[1] Unique Match (Blue): %d\n[2] Clonal Match (Green): %d\n[3] Swapped Mismatch (Orange): %d\n[4] True Mismatch (Grey): %d\n[5] No Data (Black): %d",
-      c_unique, c_clone_in, c_clone_out, c_mismatch, c_nodata
+      "Sample Pairing Audit\n(IBS Threshold = %.2f)\n------------------------------\n[1] Unique Match (Blue): %d\n[2] Clonal Match (Green): %d\n[3] Swapped Mismatch (Orange): %d\n[4] True Mismatch (Grey): %d\n[5] No Data (Black): %d",
+      match_threshold, c_unique, c_clone_in, c_clone_out, c_mismatch, c_nodata
     )
 
     df_mismatch <- rain_df[rain_df$Match_Type %in% c("4_True_Mismatch", "5_No_Data"), , drop = FALSE]
     df_colored <- rain_df[rain_df$Match_Type %in% c("1_Unique_Match", "2_Clonal_Match", "3_Swapped_Mismatch"), , drop = FALSE]
-    df_alert <- rain_df[rain_df$IBS < 0.85 & rain_df$Type == "Paired Match", , drop = FALSE]
+    df_alert <- rain_df[rain_df$IBS < alert_threshold & rain_df$Type == "paired_match", , drop = FALSE]
 
     min_y <- min(0.8, min(rain_df$IBS, na.rm = TRUE))
     max_y <- max(rain_df$IBS, na.rm = TRUE)
@@ -504,8 +535,8 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
       geom_line(data = df_colored, aes(x = Type, y = IBS, group = Sample, color = Match_Type), linewidth = 0.9, alpha = 0.8) +
       geom_point(data = df_mismatch, aes(x = Type, y = IBS), fill = "grey75", color = "grey85", size = 2, alpha = 0.5, shape = 21) +
       geom_point(data = df_colored, aes(x = Type, y = IBS, fill = Type), size = 2.5, alpha = 0.9, shape = 21, color = "white") +
-      geom_hline(yintercept = 0.85, color = "#d73027", linetype = "dashed", linewidth = 0.8, alpha = 0.7) +
-      annotate("text", x = 1.5, y = 0.85, label = "IBS = 0.85 Alert Baseline", color = "#d73027", vjust = -0.6, fontface = "bold", size = 4)
+      geom_hline(yintercept = alert_threshold, color = "#d73027", linetype = "dashed", linewidth = 0.8, alpha = 0.7) +
+      annotate("text", x = median(seq_along(levels(rain_df$Type))), y = alert_threshold, label = sprintf("IBS = %.2f Alert Baseline", alert_threshold), color = "#d73027", vjust = -0.6, fontface = "bold", size = 4)
 
     if (nrow(df_alert) > 0) {
       if (has_ggrepel) {
@@ -529,10 +560,18 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
       theme_bw(base_size = 15) +
       labs(
         title = paste("Raincloud IBS Audit:", opt[["prefix"]]),
-        subtitle = "Internal background vs paired 1-to-1 match; colored by 4-type classification",
+        subtitle = if (opt[["plot-mode"]] == "dna") "DNA mode: Z23 internal vs paired match vs B25 internal" else "RNA mode: internal background vs paired match",
         x = "", y = "Identity By State (IBS) Score"
       ) +
-      scale_fill_manual(values = c("Internal Background" = "#4575b4", "Paired Match" = "#fdae61")) +
+      scale_fill_manual(values = if (opt[["plot-mode"]] == "dna") {
+        vals <- c("#4575b4", "#fdae61", "#74add1")
+        names(vals) <- levels(rain_df$Type)
+        vals
+      } else {
+        vals <- c("#4575b4", "#fdae61")
+        names(vals) <- levels(rain_df$Type)
+        vals
+      }) +
       scale_color_manual(values = c(
         "1_Unique_Match" = "#0072B2",
         "2_Clonal_Match" = "#009E73",
@@ -558,23 +597,30 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
 
   dist_df <- build_distribution_df(mat, valid_group_y, valid_group_x, pair_summary)
   if (nrow(dist_df) > 0) {
-    density_cols <- c("#4575b4", "#74add1", "#d73027", "#fdae61")
-    names(density_cols) <- c(
-      paste0(opt[["group-y"]], "_internal"),
-      paste0(opt[["group-x"]], "_internal"),
-      "paired_1to1",
-      "cross_nonpaired"
-    )
+    if (opt[["plot-mode"]] == "rna") {
+      dist_df <- dist_df[dist_df$Category %in% c(paste0(opt[["group-y"]], "_internal"), "paired_1to1", "cross_nonpaired"), , drop = FALSE]
+      dist_df$Category <- factor(dist_df$Category, levels = c(paste0(opt[["group-y"]], "_internal"), "paired_1to1", "cross_nonpaired"))
+      density_cols <- c("#4575b4", "#d73027", "#fdae61")
+      names(density_cols) <- c(paste0(opt[["group-y"]], "_internal"), "paired_1to1", "cross_nonpaired")
+    } else {
+      density_cols <- c("#4575b4", "#74add1", "#d73027", "#fdae61")
+      names(density_cols) <- c(
+        paste0(opt[["group-y"]], "_internal"),
+        paste0(opt[["group-x"]], "_internal"),
+        "paired_1to1",
+        "cross_nonpaired"
+      )
+    }
 
     p_density <- ggplot(dist_df, aes(x = IBS, color = Category, fill = Category)) +
       geom_density(alpha = 0.18, linewidth = 1.2, adjust = 1.1) +
-      geom_vline(xintercept = 0.99, linetype = "dashed", color = "grey35", linewidth = 0.7) +
-      geom_vline(xintercept = 0.85, linetype = "dotted", color = "#d73027", linewidth = 0.7) +
+      geom_vline(xintercept = match_threshold, linetype = "dashed", color = "grey35", linewidth = 0.7) +
+      geom_vline(xintercept = alert_threshold, linetype = "dotted", color = "#d73027", linewidth = 0.7) +
       scale_color_manual(values = density_cols) +
       scale_fill_manual(values = density_cols) +
       labs(
         title = paste("IBS Density Comparison:", opt[["prefix"]]),
-        subtitle = "Within-group, paired 1-to-1, and cross-group non-paired IBS distributions",
+        subtitle = if (opt[["plot-mode"]] == "dna") "DNA mode: within-group, paired 1-to-1, and cross-group non-paired IBS distributions" else "RNA mode: internal, paired 1-to-1, and cross-group non-paired IBS distributions",
         x = "IBS",
         y = "Density",
         color = "Category",

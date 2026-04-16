@@ -216,6 +216,36 @@ draw_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", show_values
   dev.off()
 }
 
+write_static_html_report <- function(pair_summary, summary_df, out_file) {
+  row_color <- function(status) {
+    if (status == "MATCH") return("#d9ead3")
+    if (status == "MISMATCH") return("#f4cccc")
+    if (status == "NO_DATA") return("#d9d9d9")
+    "#ffffff"
+  }
+
+  con <- file(out_file, "w")
+  on.exit(close(con), add = TRUE)
+  writeLines("<html><head><meta charset='utf-8'><style>body{font-family:Arial,sans-serif;margin:18px} table{border-collapse:collapse;font-size:12px;margin-bottom:18px} th,td{border:1px solid #999;padding:4px 6px} th{background:#f0f0f0} h2{margin-top:22px}</style></head><body>", con)
+  writeLines("<h1>IBS Report Summary</h1>", con)
+  writeLines("<h2>Overall Summary</h2>", con)
+  writeLines("<table>", con)
+  writeLines("<tr>" %+% paste(sprintf("<th>%s</th>", names(summary_df)), collapse = "") %+% "</tr>", con)
+  writeLines("<tr>" %+% paste(sprintf("<td>%s</td>", summary_df[1, ]), collapse = "") %+% "</tr>", con)
+  writeLines("</table>", con)
+  writeLines("<h2>Per-sample Pair Summary</h2>", con)
+  writeLines("<table>", con)
+  writeLines("<tr>" %+% paste(sprintf("<th>%s</th>", names(pair_summary)), collapse = "") %+% "</tr>", con)
+  for (i in seq_len(nrow(pair_summary))) {
+    color <- row_color(pair_summary$status[i])
+    vals <- ifelse(is.na(pair_summary[i, ]), "", as.character(pair_summary[i, ]))
+    writeLines("<tr style='background:" %+% color %+% "'>" %+% paste(sprintf("<td>%s</td>", vals), collapse = "") %+% "</tr>", con)
+  }
+  writeLines("</table></body></html>", con)
+}
+
+`%+%` <- function(a, b) paste0(a, b)
+
 get_upper_triangle_values <- function(m) {
   if (is.null(m) || nrow(m) < 2 || ncol(m) < 2) return(numeric(0))
   m[lower.tri(m, diag = FALSE)]
@@ -427,6 +457,7 @@ write.table(
   sep = "\t",
   row.names = FALSE
 )
+write_static_html_report(pair_summary, summary_df, file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_report.html")))
 
 cat("[4/6] Drawing within-group heatmaps...\n")
 
@@ -458,6 +489,20 @@ for (g in unique(c(opt[["group-y"]], opt[["group-x"]]))) {
     paste(opt[["prefix"]], "Internal IBS:", g),
     show_values = nrow(g_df) <= 80
   )
+
+  dup_mat <- self_mat
+  diag(dup_mat) <- NA
+  dup_idx <- which(dup_mat >= match_threshold, arr.ind = TRUE)
+  if (nrow(dup_idx) > 0) {
+    dup_ids <- unique(rownames(dup_mat)[dup_idx[, 1]])
+    dup_sub <- self_mat[dup_ids, dup_ids, drop = FALSE]
+    draw_heatmap(
+      dup_sub,
+      file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_Internal_Duplicates_", g, ".pdf")),
+      paste(opt[["prefix"]], "Potential Internal Duplicates:", g),
+      show_values = TRUE
+    )
+  }
 }
 
 cat("[5/6] Writing full IBS matrix...\n")
@@ -469,6 +514,26 @@ write.table(
   sep = "\t",
   row.names = FALSE
 )
+
+mismatch_df <- pair_summary[pair_summary$status == "MISMATCH", , drop = FALSE]
+if (nrow(mismatch_df) > 0) {
+  mismatch_rows <- mismatch_df$sample_y_match
+  mismatch_cols <- unique(c(mismatch_df$expected_x_match, cols_x_match[match(mismatch_df$best_x, cols_x_label)]))
+  mismatch_rows <- mismatch_rows[!is.na(mismatch_rows) & mismatch_rows %in% rownames(mat)]
+  mismatch_cols <- mismatch_cols[!is.na(mismatch_cols) & mismatch_cols %in% colnames(mat)]
+  if (length(mismatch_rows) > 0 && length(mismatch_cols) > 0) {
+    mismatch_mat <- mat[mismatch_rows, mismatch_cols, drop = FALSE]
+    rownames(mismatch_mat) <- mismatch_df$sample_y[match(mismatch_rows, mismatch_df$sample_y_match)]
+    mapped_cols <- cols_x_label[match(colnames(mismatch_mat), cols_x_match)]
+    colnames(mismatch_mat) <- ifelse(is.na(mapped_cols), colnames(mismatch_mat), mapped_cols)
+    draw_heatmap(
+      mismatch_mat,
+      file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_Mismatch_Audit.pdf")),
+      paste(opt[["prefix"]], "Mismatch Audit"),
+      show_values = TRUE
+    )
+  }
+}
 
 if (requireNamespace("ggplot2", quietly = TRUE)) {
   cat("[6/8] Drawing raincloud and density distribution plots...\n")
@@ -554,7 +619,7 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
     }
 
     p_rain <- p_rain +
-      annotate("label", x = 2.5, y = max_y - (y_range * 0.05), label = stat_text,
+      annotate("label", x = if (opt[["plot-mode"]] == "dna") 3.55 else 2.8, y = max_y + (y_range * 0.04), label = stat_text,
                hjust = 0, vjust = 1, fill = "#f8f9fa", color = "black",
                label.size = 0.8, fontface = "bold", size = 4.3, alpha = 0.9) +
       theme_bw(base_size = 15) +
@@ -586,7 +651,7 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
         plot.subtitle = element_text(hjust = 0.5, color = "grey30", size = 11),
         axis.text.x = element_text(face = "bold", color = "black", size = 13),
         panel.grid.major.x = element_blank(),
-        plot.margin = margin(t = 15, r = 220, b = 15, l = 15)
+        plot.margin = margin(t = 30, r = 260, b = 15, l = 15)
       )
 
     rain_out <- file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_density_distribution.pdf"))

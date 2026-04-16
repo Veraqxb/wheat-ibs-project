@@ -33,6 +33,14 @@ opt[["group-x-match-mode"]] <- opt[["group-x-match-mode"]] %||% "direct"
 opt[["plot-mode"]] <- opt[["plot-mode"]] %||% "dna"
 opt[["alert-threshold"]] <- opt[["alert-threshold"]] %||% "0.85"
 opt[["match-threshold"]] <- opt[["match-threshold"]] %||% if (opt[["plot-mode"]] == "rna") "0.90" else "0.99"
+opt[["secondary-group"]] <- opt[["secondary-group"]] %||% ""
+opt[["secondary-group-match-col"]] <- opt[["secondary-group-match-col"]] %||% ""
+opt[["secondary-group-match-mode"]] <- opt[["secondary-group-match-mode"]] %||% "direct"
+opt[["ibs-margin-threshold"]] <- opt[["ibs-margin-threshold"]] %||% "0.01"
+opt[["expr-weight"]] <- opt[["expr-weight"]] %||% "0.2"
+opt[["expr-pass-threshold"]] <- opt[["expr-pass-threshold"]] %||% "0.6"
+opt[["expr-z23-file"]] <- opt[["expr-z23-file"]] %||% ""
+opt[["expr-b25-file"]] <- opt[["expr-b25-file"]] %||% ""
 
 dir.create(opt[["outdir"]], recursive = TRUE, showWarnings = FALSE)
 
@@ -86,6 +94,18 @@ if (nzchar(opt[["group-y-match-col"]]) && !(opt[["group-y-match-col"]] %in% avai
 if (nzchar(opt[["group-x-match-col"]]) && !(opt[["group-x-match-col"]] %in% available_cols)) {
   stop(
     "Missing map column for group-x-match-col: ", opt[["group-x-match-col"]],
+    "\nAvailable columns: ", paste(available_cols, collapse = ", ")
+  )
+}
+if (nzchar(opt[["secondary-group"]]) && !(opt[["secondary-group"]] %in% available_cols)) {
+  stop(
+    "Missing map column for secondary-group: ", opt[["secondary-group"]],
+    "\nAvailable columns: ", paste(available_cols, collapse = ", ")
+  )
+}
+if (nzchar(opt[["secondary-group-match-col"]]) && !(opt[["secondary-group-match-col"]] %in% available_cols)) {
+  stop(
+    "Missing map column for secondary-group-match-col: ", opt[["secondary-group-match-col"]],
     "\nAvailable columns: ", paste(available_cols, collapse = ", ")
   )
 }
@@ -144,6 +164,40 @@ resolve_group_ids <- function(map_df, logical_col, match_col, match_mode) {
   raw_match_ids <- if (nzchar(match_col)) map_df[[match_col]] else logical_ids
   match_ids <- apply_match_mode(raw_match_ids, match_mode)
   list(label = logical_ids, match = match_ids)
+}
+
+extract_sample_id <- function(x) {
+  if (length(x) == 0 || is.na(x) || !nzchar(x)) return(NA_character_)
+  m <- regexpr("([0-9]+)$", x, perl = TRUE)
+  if (m[1] < 0) return(NA_character_)
+  regmatches(x, m)
+}
+
+read_expression_table <- function(path) {
+  if (!nzchar(path) || !file.exists(path)) return(NULL)
+  df <- read.table(path, header = TRUE, sep = "\t", stringsAsFactors = FALSE, check.names = FALSE)
+  names(df) <- tolower(names(df))
+  if (!("sample_y" %in% names(df))) stop("Expression file missing required column: sample_y -> ", path)
+  if (!("expr_score" %in% names(df))) stop("Expression file missing required column: expr_score -> ", path)
+  if (!("reference_id" %in% names(df))) df$reference_id <- NA_character_
+  df
+}
+
+lookup_expression_score <- function(expr_df, sample_y, reference_id) {
+  if (is.null(expr_df) || is.na(sample_y) || !nzchar(sample_y)) return(NA_real_)
+  sample_hits <- expr_df[expr_df$sample_y == sample_y, , drop = FALSE]
+  if (nrow(sample_hits) == 0) return(NA_real_)
+  exact_hits <- sample_hits[!is.na(sample_hits$reference_id) & sample_hits$reference_id == reference_id, , drop = FALSE]
+  if (nrow(exact_hits) > 0) return(suppressWarnings(as.numeric(exact_hits$expr_score[1])))
+  no_ref_hits <- sample_hits[is.na(sample_hits$reference_id) | sample_hits$reference_id == "", , drop = FALSE]
+  if (nrow(no_ref_hits) > 0) return(suppressWarnings(as.numeric(no_ref_hits$expr_score[1])))
+  suppressWarnings(as.numeric(sample_hits$expr_score[1]))
+}
+
+safe_max <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[!is.na(x)]
+  if (length(x) == 0) NA_real_ else max(x)
 }
 
 draw_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", show_values = TRUE) {
@@ -698,11 +752,265 @@ write.table(
   sep = "\t",
   row.names = FALSE
 )
+
+run_rna_decision_module <- function() {
+  if (opt[["plot-mode"]] != "rna" || !nzchar(opt[["secondary-group"]])) {
+    return(invisible(NULL))
+  }
+
+  cat("[3b/6] Building Z23-centered RNA decision table...\n")
+
+  secondary_group <- resolve_group_ids(
+    valid_map,
+    opt[["secondary-group"]],
+    opt[["secondary-group-match-col"]],
+    opt[["secondary-group-match-mode"]]
+  )
+
+  secondary_labels <- secondary_group$label
+  secondary_matches <- secondary_group$match
+  secondary_keep <- !is.na(secondary_labels) & !is.na(secondary_matches) & (secondary_matches %in% ids)
+  secondary_labels <- secondary_labels[secondary_keep]
+  secondary_matches <- secondary_matches[secondary_keep]
+
+  if (length(secondary_matches) == 0) {
+    warning("Secondary group has no valid IBS IDs; skipping RNA decision module.")
+    return(invisible(NULL))
+  }
+
+  expr_z23_df <- read_expression_table(opt[["expr-z23-file"]])
+  expr_b25_df <- read_expression_table(opt[["expr-b25-file"]])
+  margin_threshold <- as.numeric(opt[["ibs-margin-threshold"]])
+  expr_weight <- as.numeric(opt[["expr-weight"]])
+  expr_pass_threshold <- as.numeric(opt[["expr-pass-threshold"]])
+
+  z23_key_map <- setNames(vapply(cols_x_label, extract_sample_id, character(1)), cols_x_label)
+  b25_key_map <- setNames(vapply(secondary_labels, extract_sample_id, character(1)), secondary_labels)
+  sample_keys <- vapply(rows_y_label, extract_sample_id, character(1))
+
+  decision_df <- data.frame(
+    sample_y = rows_y_label,
+    sample_y_match = rows_y_match,
+    sample_id = sample_keys,
+    expected_z23 = cols_x_label,
+    expected_b25 = if (length(secondary_labels) == length(rows_y_label)) secondary_labels else NA_character_,
+    best_z23_id = NA_character_,
+    best_z23_ibs = NA_real_,
+    second_z23_id = NA_character_,
+    second_z23_ibs = NA_real_,
+    second_z23_key = NA_character_,
+    delta_z23 = NA_real_,
+    expr_score_z23 = NA_real_,
+    match_score_z23 = NA_real_,
+    best_b25_id = NA_character_,
+    best_b25_ibs = NA_real_,
+    second_b25_id = NA_character_,
+    second_b25_ibs = NA_real_,
+    second_b25_key = NA_character_,
+    delta_b25 = NA_real_,
+    expr_score_b25 = NA_real_,
+    match_score_b25 = NA_real_,
+    consistency_flag = NA_character_,
+    failure_reason = NA_character_,
+    primary_class = NA_character_,
+    diagnostic_class = NA_character_,
+    stringsAsFactors = FALSE
+  )
+
+  reliable_reference <- function(best_ibs, delta_val, expr_score) {
+    ibs_ok <- !is.na(best_ibs) && best_ibs >= match_threshold
+    delta_ok <- !is.na(delta_val) && delta_val >= margin_threshold
+    expr_ok <- is.na(expr_score) || expr_score >= expr_pass_threshold
+    ibs_ok && delta_ok && expr_ok
+  }
+
+  collect_failure_reason <- function(best_ibs, delta_val, expr_score, prefix) {
+    reason <- character(0)
+    if (is.na(best_ibs)) {
+      reason <- c(reason, paste0(prefix, ":no_ibs"))
+    } else if (best_ibs < match_threshold) {
+      reason <- c(reason, paste0(prefix, ":ibs_lt_threshold"))
+    }
+    if (is.na(delta_val)) {
+      reason <- c(reason, paste0(prefix, ":no_margin"))
+    } else if (delta_val < margin_threshold) {
+      reason <- c(reason, paste0(prefix, ":margin_lt_threshold"))
+    }
+    if (!is.na(expr_score) && expr_score < expr_pass_threshold) {
+      reason <- c(reason, paste0(prefix, ":expr_lt_threshold"))
+    }
+    paste(reason, collapse = ";")
+  }
+
+  for (i in seq_len(nrow(decision_df))) {
+    sy_match <- decision_df$sample_y_match[i]
+    sy_label <- decision_df$sample_y[i]
+
+    z_vals <- as.numeric(mat[sy_match, cols_x_match])
+    names(z_vals) <- cols_x_label
+    z_ord <- order(z_vals, decreasing = TRUE, na.last = TRUE)
+    if (length(z_ord) > 0 && !all(is.na(z_vals))) {
+      decision_df$best_z23_id[i] <- names(z_vals)[z_ord[1]]
+      decision_df$best_z23_ibs[i] <- z_vals[z_ord[1]]
+      if (length(z_ord) >= 2) {
+        decision_df$second_z23_id[i] <- names(z_vals)[z_ord[2]]
+        decision_df$second_z23_ibs[i] <- z_vals[z_ord[2]]
+        decision_df$second_z23_key[i] <- z23_key_map[decision_df$second_z23_id[i]]
+      }
+      decision_df$delta_z23[i] <- ifelse(is.na(decision_df$best_z23_ibs[i]) || is.na(decision_df$second_z23_ibs[i]), NA_real_, decision_df$best_z23_ibs[i] - decision_df$second_z23_ibs[i])
+      decision_df$expr_score_z23[i] <- lookup_expression_score(expr_z23_df, sy_label, decision_df$best_z23_id[i])
+      decision_df$match_score_z23[i] <- ifelse(is.na(decision_df$best_z23_ibs[i]), NA_real_, decision_df$best_z23_ibs[i] + ifelse(is.na(decision_df$expr_score_z23[i]), 0, expr_weight * decision_df$expr_score_z23[i]))
+    }
+
+    b_vals <- as.numeric(mat[sy_match, secondary_matches])
+    names(b_vals) <- secondary_labels
+    b_ord <- order(b_vals, decreasing = TRUE, na.last = TRUE)
+    if (length(b_ord) > 0 && !all(is.na(b_vals))) {
+      decision_df$best_b25_id[i] <- names(b_vals)[b_ord[1]]
+      decision_df$best_b25_ibs[i] <- b_vals[b_ord[1]]
+      if (length(b_ord) >= 2) {
+        decision_df$second_b25_id[i] <- names(b_vals)[b_ord[2]]
+        decision_df$second_b25_ibs[i] <- b_vals[b_ord[2]]
+        decision_df$second_b25_key[i] <- b25_key_map[decision_df$second_b25_id[i]]
+      }
+      decision_df$delta_b25[i] <- ifelse(is.na(decision_df$best_b25_ibs[i]) || is.na(decision_df$second_b25_ibs[i]), NA_real_, decision_df$best_b25_ibs[i] - decision_df$second_b25_ibs[i])
+      decision_df$expr_score_b25[i] <- lookup_expression_score(expr_b25_df, sy_label, decision_df$best_b25_id[i])
+      decision_df$match_score_b25[i] <- ifelse(is.na(decision_df$best_b25_ibs[i]), NA_real_, decision_df$best_b25_ibs[i] + ifelse(is.na(decision_df$expr_score_b25[i]), 0, expr_weight * decision_df$expr_score_b25[i]))
+    }
+
+    z23_reliable <- reliable_reference(decision_df$best_z23_ibs[i], decision_df$delta_z23[i], decision_df$expr_score_z23[i])
+    b25_reliable <- reliable_reference(decision_df$best_b25_ibs[i], decision_df$delta_b25[i], decision_df$expr_score_b25[i])
+
+    z23_key <- z23_key_map[decision_df$best_z23_id[i]]
+    b25_key <- b25_key_map[decision_df$best_b25_id[i]]
+    decision_df$consistency_flag[i] <- ifelse(
+      !is.na(z23_key) && !is.na(b25_key) && nzchar(z23_key) && nzchar(b25_key),
+      ifelse(z23_key == b25_key, "Consistent", "Conflict"),
+      "Partial"
+    )
+
+    z23_failure <- collect_failure_reason(decision_df$best_z23_ibs[i], decision_df$delta_z23[i], decision_df$expr_score_z23[i], "Z23")
+    b25_failure <- collect_failure_reason(decision_df$best_b25_ibs[i], decision_df$delta_b25[i], decision_df$expr_score_b25[i], "B25")
+
+    if (z23_reliable && b25_reliable && decision_df$consistency_flag[i] == "Conflict") {
+      decision_df$primary_class[i] <- "Unresolved_Drop"
+      decision_df$diagnostic_class[i] <- "Both_conflict"
+      decision_df$failure_reason[i] <- "Both reliable but conflicting targets"
+    } else if (z23_reliable) {
+      decision_df$primary_class[i] <- "Primary_Z23"
+      decision_df$diagnostic_class[i] <- "Z23_direct_match"
+      decision_df$failure_reason[i] <- ""
+    } else if (b25_reliable) {
+      decision_df$primary_class[i] <- "Rescued_by_B25"
+      decision_df$diagnostic_class[i] <- "B25_rescued"
+      decision_df$failure_reason[i] <- z23_failure
+    } else if ((!is.na(decision_df$best_z23_ibs[i]) && decision_df$best_z23_ibs[i] >= match_threshold) || (!is.na(decision_df$delta_z23[i]) && decision_df$delta_z23[i] > 0)) {
+      decision_df$primary_class[i] <- "Unresolved_Drop"
+      decision_df$diagnostic_class[i] <- "Z23_ambiguous"
+      decision_df$failure_reason[i] <- paste(z23_failure, b25_failure, sep = ifelse(nzchar(z23_failure) && nzchar(b25_failure), ";", ""))
+    } else {
+      decision_df$primary_class[i] <- "Unresolved_Drop"
+      decision_df$diagnostic_class[i] <- "Unmatched_drop"
+      decision_df$failure_reason[i] <- paste(z23_failure, b25_failure, sep = ifelse(nzchar(z23_failure) && nzchar(b25_failure), ";", ""))
+    }
+  }
+
+  write.table(decision_df, file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_decision_table.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+  write.table(decision_df[decision_df$primary_class != "Unresolved_Drop", , drop = FALSE], file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_kept_samples.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+  write.table(decision_df[decision_df$primary_class == "Unresolved_Drop", , drop = FALSE], file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_dropped_samples.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+
+  class_summary <- data.frame(
+    prefix = opt[["prefix"]],
+    primary_z23_count = sum(decision_df$primary_class == "Primary_Z23", na.rm = TRUE),
+    rescued_by_b25_count = sum(decision_df$primary_class == "Rescued_by_B25", na.rm = TRUE),
+    unresolved_drop_count = sum(decision_df$primary_class == "Unresolved_Drop", na.rm = TRUE),
+    z23_direct_match_count = sum(decision_df$diagnostic_class == "Z23_direct_match", na.rm = TRUE),
+    z23_ambiguous_count = sum(decision_df$diagnostic_class == "Z23_ambiguous", na.rm = TRUE),
+    b25_rescued_count = sum(decision_df$diagnostic_class == "B25_rescued", na.rm = TRUE),
+    both_conflict_count = sum(decision_df$diagnostic_class == "Both_conflict", na.rm = TRUE),
+    unmatched_drop_count = sum(decision_df$diagnostic_class == "Unmatched_drop", na.rm = TRUE),
+    stringsAsFactors = FALSE
+  )
+  write.table(class_summary, file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_class_summary.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+
+  if (requireNamespace("ggplot2", quietly = TRUE)) {
+    library(ggplot2)
+    point_cols <- c(Primary_Z23 = "#2c7fb8", Rescued_by_B25 = "#41ab5d", Unresolved_Drop = "#d64545")
+
+    scatter_file <- file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_z23_vs_b25_ibs_scatter.pdf"))
+    pdf(scatter_file, width = 7, height = 6)
+    print(
+      ggplot2::ggplot(decision_df, ggplot2::aes(x = best_z23_ibs, y = best_b25_ibs, color = primary_class)) +
+        ggplot2::geom_point(size = 2.6, alpha = 0.9) +
+        ggplot2::geom_vline(xintercept = match_threshold, linetype = "dashed", color = "#2c7fb8") +
+        ggplot2::geom_hline(yintercept = match_threshold, linetype = "dashed", color = "#41ab5d") +
+        ggplot2::scale_color_manual(values = point_cols) +
+        ggplot2::labs(title = paste(opt[["prefix"]], "Z23 vs B25 IBS"), x = "Best Z23 IBS", y = "Best B25 IBS", color = "Primary class") +
+        ggplot2::theme_bw(base_size = 12)
+    )
+    dev.off()
+
+    expr_plot_df <- decision_df[!is.na(decision_df$match_score_z23) | !is.na(decision_df$match_score_b25), , drop = FALSE]
+    if (nrow(expr_plot_df) > 0) {
+      expr_plot_df <- expr_plot_df[order(-safe_max(cbind(expr_plot_df$match_score_z23, expr_plot_df$match_score_b25))), , drop = FALSE]
+      expr_plot_df$sample_order <- seq_len(nrow(expr_plot_df))
+      max_expr <- safe_max(c(expr_plot_df$expr_score_z23, expr_plot_df$expr_score_b25))
+      scale_factor <- ifelse(is.na(max_expr) || max_expr == 0, 1, 1 / max_expr)
+      dual_file <- file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_ibs_expression_dual_axis.pdf"))
+      pdf(dual_file, width = 10, height = 6)
+      plot(expr_plot_df$sample_order, expr_plot_df$best_z23_ibs, type = "b", pch = 16, col = "#2c7fb8",
+           ylim = c(0, 1.05), xlab = "RNA samples (sorted)", ylab = "IBS", main = paste(opt[["prefix"]], "IBS vs expression"))
+      lines(expr_plot_df$sample_order, expr_plot_df$best_b25_ibs, type = "b", pch = 17, col = "#41ab5d")
+      if (!all(is.na(expr_plot_df$expr_score_z23))) {
+        lines(expr_plot_df$sample_order, expr_plot_df$expr_score_z23 * scale_factor, type = "b", pch = 1, lty = 2, col = "#08519c")
+      }
+      if (!all(is.na(expr_plot_df$expr_score_b25))) {
+        lines(expr_plot_df$sample_order, expr_plot_df$expr_score_b25 * scale_factor, type = "b", pch = 2, lty = 2, col = "#238b45")
+      }
+      axis(4, at = pretty(c(0, 1)) * scale_factor, labels = round(pretty(c(0, 1)), 2))
+      mtext("Expression score", side = 4, line = 3)
+      legend("bottomright", legend = c("Z23 IBS", "B25 IBS", "Z23 expr", "B25 expr"), col = c("#2c7fb8", "#41ab5d", "#08519c", "#238b45"), lty = c(1, 1, 2, 2), pch = c(16, 17, 1, 2), bty = "n")
+      dev.off()
+    }
+
+    if (requireNamespace("ggalluvial", quietly = TRUE)) {
+      sankey_df <- data.frame(
+        source = "RNA",
+        z23_path = ifelse(decision_df$diagnostic_class %in% c("Z23_direct_match", "Z23_ambiguous", "Both_conflict"), decision_df$diagnostic_class, "Z23_fail"),
+        b25_path = ifelse(decision_df$diagnostic_class == "B25_rescued", "B25_rescue", ifelse(decision_df$diagnostic_class == "Both_conflict", "B25_conflict", "B25_fail")),
+        outcome = decision_df$primary_class,
+        stringsAsFactors = FALSE
+      )
+      sankey_plot_df <- as.data.frame(table(sankey_df$source, sankey_df$z23_path, sankey_df$b25_path, sankey_df$outcome), stringsAsFactors = FALSE)
+      names(sankey_plot_df) <- c("RNA", "Z23", "B25", "Outcome", "Freq")
+      sankey_plot_df <- sankey_plot_df[sankey_plot_df$Freq > 0, , drop = FALSE]
+      sankey_file <- file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_decision_sankey.pdf"))
+      pdf(sankey_file, width = 10, height = 6)
+      print(
+        ggplot2::ggplot(
+          sankey_plot_df,
+          ggplot2::aes(axis1 = RNA, axis2 = Z23, axis3 = B25, axis4 = Outcome, y = Freq)
+        ) +
+          ggalluvial::geom_alluvium(ggplot2::aes(fill = Outcome), width = 0.18, alpha = 0.85) +
+          ggalluvial::geom_stratum(width = 0.18, fill = "grey95", color = "grey50") +
+          ggalluvial::geom_text(stat = "stratum", ggplot2::aes(label = after_stat(stratum)), size = 3.2) +
+          ggplot2::scale_x_discrete(limits = c("RNA", "Z23", "B25", "Outcome"), expand = c(0.08, 0.03)) +
+          ggplot2::scale_fill_manual(values = point_cols) +
+          ggplot2::labs(title = paste(opt[["prefix"]], "Decision Sankey"), y = "Sample count", x = "", fill = "Primary class") +
+          ggplot2::theme_bw(base_size = 12)
+      )
+      dev.off()
+    }
+  }
+
+  invisible(decision_df)
+}
 draw_match_type_heatmap(
   pair_summary,
   file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_DNA_match_type_heatmap.pdf")),
   paste(opt[["prefix"]], "DNA Pairing Classes")
 )
+rna_decision_df <- run_rna_decision_module()
 interactive_ok <- write_interactive_html_report(
   pair_summary,
   summary_df,

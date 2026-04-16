@@ -32,9 +32,17 @@ Optional variables:
   GROUP_Y_MATCH_COL   optional map column used to match IBS IDs for GROUP_Y
   GROUP_X_MATCH_MODE  optional transform mode for GROUP_X direct IDs
   GROUP_Y_MATCH_MODE  optional transform mode for GROUP_Y direct IDs
+  SECONDARY_GROUP     optional fallback reference group for RNA decision system
+  SECONDARY_GROUP_MATCH_COL optional map column used to match IBS IDs for SECONDARY_GROUP
+  SECONDARY_GROUP_MATCH_MODE optional transform mode for SECONDARY_GROUP direct IDs
   PLOT_MODE           optional report mode, e.g. dna or rna
   MATCH_THRESHOLD     optional report match threshold
   ALERT_THRESHOLD     optional report alert threshold
+  IBS_MARGIN_THRESHOLD optional RNA decision margin threshold
+  EXPR_WEIGHT         optional expression score weight in RNA decision
+  EXPR_PASS_THRESHOLD optional expression support pass threshold
+  EXPR_Z23_FILE       optional expression similarity table for Z23 reference
+  EXPR_B25_FILE       optional expression similarity table for B25 reference
   MIN_MAC             default 2
   MAX_GENO            default 0.2
   HIGH_HET_THRESHOLD  default 0.05
@@ -80,9 +88,17 @@ GROUP_X_MATCH_COL="${GROUP_X_MATCH_COL:-}"
 GROUP_Y_MATCH_COL="${GROUP_Y_MATCH_COL:-}"
 GROUP_X_MATCH_MODE="${GROUP_X_MATCH_MODE:-direct}"
 GROUP_Y_MATCH_MODE="${GROUP_Y_MATCH_MODE:-direct}"
+SECONDARY_GROUP="${SECONDARY_GROUP:-}"
+SECONDARY_GROUP_MATCH_COL="${SECONDARY_GROUP_MATCH_COL:-}"
+SECONDARY_GROUP_MATCH_MODE="${SECONDARY_GROUP_MATCH_MODE:-direct}"
 PLOT_MODE="${PLOT_MODE:-}"
 MATCH_THRESHOLD="${MATCH_THRESHOLD:-}"
 ALERT_THRESHOLD="${ALERT_THRESHOLD:-0.85}"
+IBS_MARGIN_THRESHOLD="${IBS_MARGIN_THRESHOLD:-0.01}"
+EXPR_WEIGHT="${EXPR_WEIGHT:-0.2}"
+EXPR_PASS_THRESHOLD="${EXPR_PASS_THRESHOLD:-0.6}"
+EXPR_Z23_FILE="${EXPR_Z23_FILE:-}"
+EXPR_B25_FILE="${EXPR_B25_FILE:-}"
 
 if [[ -z "$PLOT_MODE" ]]; then
   if [[ "$GROUP_MODE" == "5group" ]]; then
@@ -304,23 +320,42 @@ run_plink_qc() {
 
 run_report() {
   log "Generating IBS report and heatmaps"
-  run_cmd "$RSCRIPT_BIN" "$(dirname "$0")/wheat_ibs_report.R" \
-    --mibs "${PLINK_FINAL}.mibs" \
-    --id "${PLINK_FINAL}.mibs.id" \
-    --map "$MAP_FILE" \
-    --group-y "$GROUP_Y" \
-    --group-x "$GROUP_X" \
-    --group-y-match-col "$GROUP_Y_MATCH_COL" \
-    --group-x-match-col "$GROUP_X_MATCH_COL" \
-    --group-y-match-mode "$GROUP_Y_MATCH_MODE" \
-    --group-x-match-mode "$GROUP_X_MATCH_MODE" \
-    --plot-mode "$PLOT_MODE" \
-    --match-threshold "$MATCH_THRESHOLD" \
-    --alert-threshold "$ALERT_THRESHOLD" \
-    --outdir "$REPORT_DIR" \
-    --prefix "$PREFIX" \
-    --zmin "$IBS_ZMIN" \
+  cmd=(
+    "$RSCRIPT_BIN" "$(dirname "$0")/wheat_ibs_report.R"
+    --mibs "${PLINK_FINAL}.mibs"
+    --id "${PLINK_FINAL}.mibs.id"
+    --map "$MAP_FILE"
+    --group-y "$GROUP_Y"
+    --group-x "$GROUP_X"
+    --group-y-match-col "$GROUP_Y_MATCH_COL"
+    --group-x-match-col "$GROUP_X_MATCH_COL"
+    --group-y-match-mode "$GROUP_Y_MATCH_MODE"
+    --group-x-match-mode "$GROUP_X_MATCH_MODE"
+    --plot-mode "$PLOT_MODE"
+    --match-threshold "$MATCH_THRESHOLD"
+    --alert-threshold "$ALERT_THRESHOLD"
+    --ibs-margin-threshold "$IBS_MARGIN_THRESHOLD"
+    --expr-weight "$EXPR_WEIGHT"
+    --expr-pass-threshold "$EXPR_PASS_THRESHOLD"
+    --outdir "$REPORT_DIR"
+    --prefix "$PREFIX"
+    --zmin "$IBS_ZMIN"
     --zmax "$IBS_ZMAX"
+  )
+
+  if [[ -n "$SECONDARY_GROUP" ]]; then
+    cmd+=(--secondary-group "$SECONDARY_GROUP")
+    cmd+=(--secondary-group-match-col "$SECONDARY_GROUP_MATCH_COL")
+    cmd+=(--secondary-group-match-mode "$SECONDARY_GROUP_MATCH_MODE")
+  fi
+  if [[ -n "$EXPR_Z23_FILE" ]]; then
+    cmd+=(--expr-z23-file "$EXPR_Z23_FILE")
+  fi
+  if [[ -n "$EXPR_B25_FILE" ]]; then
+    cmd+=(--expr-b25-file "$EXPR_B25_FILE")
+  fi
+
+  run_cmd "${cmd[@]}"
 }
 
 prepare_vcfs

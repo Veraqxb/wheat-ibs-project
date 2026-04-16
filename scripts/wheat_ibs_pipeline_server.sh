@@ -131,6 +131,7 @@ BI_VCF="${FILTER_DIR}/${PREFIX}.bi_mac${MIN_MAC}.vcf.gz"
 PLINK_RAW="${PLINK_DIR}/${PREFIX}.bi_mac${MIN_MAC}"
 PLINK_QC1="${PLINK_DIR}/${PREFIX}.qc_step1"
 PLINK_FINAL="${PLINK_DIR}/${PREFIX}.final_qc"
+MISSING_PREFIX="${PLINK_DIR}/${PREFIX}.missing"
 
 mkdir -p "$INPUT_DIR" "$MERGE_DIR" "$FILTER_DIR" "$PLINK_DIR" "$REPORT_DIR" "$LOG_DIR"
 
@@ -144,6 +145,136 @@ require_file() {
 
 require_exec() {
   [[ -x "$1" ]] || { echo "Required executable missing: $1" >&2; exit 1; }
+}
+
+contains_word() {
+  local needle="$1"
+  shift || true
+  local item
+  for item in "$@"; do
+    [[ "$item" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
+apply_match_mode_shell() {
+  local sample_id="$1"
+  local mode="${2:-direct}"
+  case "$mode" in
+    direct) printf '%s\n' "$sample_id" ;;
+    b25_to_2) printf '%s\n' "${sample_id/#B25C2_/2_}" ;;
+    *) printf '%s\n' "$sample_id" ;;
+  esac
+}
+
+get_group_match_settings() {
+  local group_name="$1"
+  local match_col=""
+  local match_mode="direct"
+
+  if [[ "$group_name" == "$GROUP_X" ]]; then
+    match_col="$GROUP_X_MATCH_COL"
+    match_mode="$GROUP_X_MATCH_MODE"
+  elif [[ "$group_name" == "$GROUP_Y" ]]; then
+    match_col="$GROUP_Y_MATCH_COL"
+    match_mode="$GROUP_Y_MATCH_MODE"
+  elif [[ -n "$SECONDARY_GROUP" && "$group_name" == "$SECONDARY_GROUP" ]]; then
+    match_col="$SECONDARY_GROUP_MATCH_COL"
+    match_mode="$SECONDARY_GROUP_MATCH_MODE"
+  fi
+
+  printf '%s\t%s\n' "$match_col" "$match_mode"
+}
+
+build_group_keep_file() {
+  local group_name="$1"
+  local keep_file="$2"
+  local settings
+  settings="$(get_group_match_settings "$group_name")"
+  local match_col="${settings%%$'\t'*}"
+  local match_mode="${settings#*$'\t'}"
+
+  awk -v group_col="$group_name" \
+      -v match_col="$match_col" \
+      -v match_mode="$match_mode" \
+      -v fam_file="${PLINK_RAW}.fam" '
+    BEGIN {
+      FS = OFS = "\t"
+      while ((getline < fam_file) > 0) {
+        present[$2] = 1
+      }
+      close(fam_file)
+    }
+    NR == 1 {
+      for (i = 1; i <= NF; i++) {
+        idx[$i] = i
+      }
+      if (!(group_col in idx)) {
+        exit 2
+      }
+      if (match_col != "" && !(match_col in idx)) {
+        exit 3
+      }
+      next
+    }
+    {
+      if (match_col != "") {
+        sample_id = $(idx[match_col])
+      } else {
+        sample_id = $(idx[group_col])
+      }
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", sample_id)
+      if (sample_id == "" || sample_id == "NA" || sample_id == "-") next
+      if (match_mode == "b25_to_2") sub(/^B25C2_/, "2_", sample_id)
+      if (sample_id in present) {
+        print sample_id, sample_id
+      }
+    }
+  ' "$MAP_FILE" | awk '!seen[$0]++' > "$keep_file"
+}
+
+run_group_missingness() {
+  local group_name="$1"
+  local keep_file="${PLINK_DIR}/${PREFIX}.${group_name}.keep"
+  local miss_out="${MISSING_PREFIX}.${group_name}"
+
+  build_group_keep_file "$group_name" "$keep_file"
+  if [[ ! -s "$keep_file" ]]; then
+    log "Skipping missingness profile for ${group_name}: no matching samples found in PLINK IDs"
+    return
+  fi
+
+  if [[ -f "${miss_out}.lmiss" ]]; then
+    log "Missingness profile for ${group_name} already exists; skipping recalculation"
+    return
+  fi
+
+  log "Calculating site missingness profile for ${group_name}"
+  run_cmd "$PLINK_BIN" --bfile "$PLINK_RAW" --chr-set "$CHR_SET" --keep "$keep_file" --missing --out "$miss_out"
+}
+
+run_missingness_profiles() {
+  local groups=()
+  local group_name
+
+  for group_name in $ALL_GROUPS; do
+    contains_word "$group_name" "${groups[@]}" || groups+=("$group_name")
+  done
+  contains_word "$GROUP_X" "${groups[@]}" || groups+=("$GROUP_X")
+  contains_word "$GROUP_Y" "${groups[@]}" || groups+=("$GROUP_Y")
+  if [[ -n "$SECONDARY_GROUP" ]]; then
+    contains_word "$SECONDARY_GROUP" "${groups[@]}" || groups+=("$SECONDARY_GROUP")
+  fi
+
+  local existing=0
+  for group_name in "${groups[@]}"; do
+    run_group_missingness "$group_name"
+    [[ -f "${MISSING_PREFIX}.${group_name}.lmiss" ]] && existing=1
+  done
+
+  if [[ "$existing" -eq 0 ]]; then
+    log "No per-group missingness profiles were generated"
+  fi
 }
 
 run_cmd() {
@@ -279,16 +410,18 @@ filter_vcf() {
 }
 
 run_plink_qc() {
-  if [[ -f "${PLINK_FINAL}.mibs" && -f "${PLINK_FINAL}.mibs.id" ]]; then
-    log "PLINK IBS outputs already exist; skipping PLINK QC and distance calculation"
-    return
-  fi
-
   log "Converting VCF to PLINK bed"
   if [[ ! -f "${PLINK_RAW}.bed" || ! -f "${PLINK_RAW}.bim" || ! -f "${PLINK_RAW}.fam" ]]; then
     run_cmd "$PLINK_BIN" --vcf "$BI_VCF" --make-bed --chr-set "$CHR_SET" --out "$PLINK_RAW" --double-id
   else
     log "PLINK raw bed already exists; skipping VCF to PLINK conversion"
+  fi
+
+  run_missingness_profiles
+
+  if [[ -f "${PLINK_FINAL}.mibs" && -f "${PLINK_FINAL}.mibs.id" ]]; then
+    log "PLINK IBS outputs already exist; skipping downstream PLINK QC and distance calculation"
+    return
   fi
 
   log "Filtering variants by missing rate: --geno ${MAX_GENO}"
@@ -337,6 +470,8 @@ run_report() {
     --ibs-margin-threshold "$IBS_MARGIN_THRESHOLD"
     --expr-weight "$EXPR_WEIGHT"
     --expr-pass-threshold "$EXPR_PASS_THRESHOLD"
+    --missing-prefix "$MISSING_PREFIX"
+    --missing-groups "${ALL_GROUPS:-$GROUP_X $GROUP_Y}"
     --outdir "$REPORT_DIR"
     --prefix "$PREFIX"
     --zmin "$IBS_ZMIN"

@@ -41,6 +41,8 @@ opt[["expr-weight"]] <- opt[["expr-weight"]] %||% "0.2"
 opt[["expr-pass-threshold"]] <- opt[["expr-pass-threshold"]] %||% "0.6"
 opt[["expr-z23-file"]] <- opt[["expr-z23-file"]] %||% ""
 opt[["expr-b25-file"]] <- opt[["expr-b25-file"]] %||% ""
+opt[["missing-prefix"]] <- opt[["missing-prefix"]] %||% ""
+opt[["missing-groups"]] <- opt[["missing-groups"]] %||% ""
 
 dir.create(opt[["outdir"]], recursive = TRUE, showWarnings = FALSE)
 
@@ -198,6 +200,83 @@ safe_max <- function(x) {
   x <- suppressWarnings(as.numeric(x))
   x <- x[!is.na(x)]
   if (length(x) == 0) NA_real_ else max(x)
+}
+
+read_missingness_profiles <- function(prefix, group_string) {
+  if (!nzchar(prefix) || !nzchar(group_string)) return(NULL)
+  groups <- unique(strsplit(group_string, "[[:space:]]+")[[1]])
+  groups <- groups[nzchar(groups)]
+  if (length(groups) == 0) return(NULL)
+
+  out <- do.call(
+    rbind,
+    lapply(groups, function(group_name) {
+      path <- paste0(prefix, ".", group_name, ".lmiss")
+      if (!file.exists(path)) return(NULL)
+      df <- read.table(path, header = TRUE, stringsAsFactors = FALSE, check.names = FALSE)
+      if (!("F_MISS" %in% names(df))) return(NULL)
+      data.frame(
+        group = group_name,
+        missing_rate = suppressWarnings(as.numeric(df$F_MISS)),
+        stringsAsFactors = FALSE
+      )
+    })
+  )
+
+  if (is.null(out) || nrow(out) == 0) return(NULL)
+  out <- out[!is.na(out$missing_rate), , drop = FALSE]
+  if (nrow(out) == 0) return(NULL)
+  out$group <- factor(out$group, levels = groups)
+  out
+}
+
+draw_missingness_profiles <- function(missing_df, out_file, title) {
+  if (is.null(missing_df) || nrow(missing_df) == 0) return(invisible(NULL))
+
+  group_levels <- levels(missing_df$group)
+  group_levels <- group_levels[!is.na(group_levels)]
+  if (length(group_levels) == 0) group_levels <- unique(as.character(missing_df$group))
+  cols <- setNames(grDevices::hcl.colors(length(group_levels), "Dark 3"), group_levels)
+
+  pdf(out_file, width = 12, height = 5.5)
+  par(mfrow = c(1, 2), mar = c(5, 5, 4, 2))
+
+  xlim <- c(0, max(1, suppressWarnings(max(missing_df$missing_rate, na.rm = TRUE))))
+  dens_list <- lapply(group_levels, function(group_name) {
+    vals <- missing_df$missing_rate[missing_df$group == group_name]
+    vals <- vals[!is.na(vals)]
+    if (length(vals) >= 2 && diff(range(vals)) > 0) {
+      density(vals, from = 0, to = xlim[2], na.rm = TRUE)
+    } else if (length(vals) == 1) {
+      density(c(vals, vals + 1e-6), from = 0, to = xlim[2], na.rm = TRUE)
+    } else {
+      NULL
+    }
+  })
+  names(dens_list) <- group_levels
+  max_y <- suppressWarnings(max(unlist(lapply(dens_list, function(x) if (is.null(x)) NA_real_ else x$y)), na.rm = TRUE))
+  if (!is.finite(max_y)) max_y <- 1
+
+  plot(NA, xlim = xlim, ylim = c(0, max_y * 1.05), xlab = "Site missing rate (F_MISS)", ylab = "Density", main = paste(title, "- Density"))
+  for (group_name in group_levels) {
+    dens <- dens_list[[group_name]]
+    if (!is.null(dens)) lines(dens, col = cols[[group_name]], lwd = 2)
+  }
+  legend("topright", legend = group_levels, col = cols[group_levels], lwd = 2, bty = "n", cex = 0.9)
+
+  plot(NA, xlim = xlim, ylim = c(0, 1), xlab = "Site missing rate (F_MISS)", ylab = "ECDF", main = paste(title, "- Cumulative"))
+  for (group_name in group_levels) {
+    vals <- missing_df$missing_rate[missing_df$group == group_name]
+    vals <- vals[!is.na(vals)]
+    if (length(vals) > 0) {
+      ec <- ecdf(vals)
+      xs <- sort(unique(c(0, vals, xlim[2])))
+      lines(xs, ec(xs), col = cols[[group_name]], lwd = 2, type = "s")
+    }
+  }
+  legend("bottomright", legend = group_levels, col = cols[group_levels], lwd = 2, bty = "n", cex = 0.9)
+
+  dev.off()
 }
 
 draw_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", show_values = TRUE) {
@@ -1111,6 +1190,15 @@ write.table(
   sep = "\t",
   row.names = FALSE
 )
+
+missing_df <- read_missingness_profiles(opt[["missing-prefix"]], opt[["missing-groups"]])
+if (!is.null(missing_df) && nrow(missing_df) > 0) {
+  draw_missingness_profiles(
+    missing_df,
+    file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_site_missingness_profiles.pdf")),
+    paste(opt[["prefix"]], "Grouped site missingness")
+  )
+}
 
 mismatch_df <- pair_summary[pair_summary$status == "MISMATCH", , drop = FALSE]
 if (nrow(mismatch_df) > 0) {

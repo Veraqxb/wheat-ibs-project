@@ -39,10 +39,24 @@ dir.create(opt[["outdir"]], recursive = TRUE, showWarnings = FALSE)
 read_pair_summary <- function(path, sample_col, expected_col) {
   if (!nzchar(path) || !file.exists(path)) return(NULL)
   df <- read.table(path, header = TRUE, sep = "\t", stringsAsFactors = FALSE, check.names = FALSE)
-  required_cols <- c("sample_y", "expected_x", "ibs_expected", "best_x", "ibs_best", "second_best", "margin", "status")
+  required_cols <- c("sample_y", "expected_x", "ibs_expected", "best_x", "ibs_best", "status")
   miss <- required_cols[!required_cols %in% colnames(df)]
   if (length(miss) > 0) {
     stop("Pair summary missing columns in ", path, ": ", paste(miss, collapse = ", "))
+  }
+  if (!("second_best" %in% colnames(df))) {
+    if ("second_ibs" %in% colnames(df)) {
+      df$second_best <- suppressWarnings(as.numeric(df$second_ibs))
+    } else {
+      df$second_best <- NA_real_
+    }
+  }
+  if (!("margin" %in% colnames(df))) {
+    df$margin <- ifelse(
+      !is.na(suppressWarnings(as.numeric(df$ibs_best))) & !is.na(suppressWarnings(as.numeric(df$second_best))),
+      suppressWarnings(as.numeric(df$ibs_best)) - suppressWarnings(as.numeric(df$second_best)),
+      NA_real_
+    )
   }
   optional_cols <- c("second_x", "third_x", "third_best", "high_match_count", "high_match_ids", "duplicate_x_ids", "match_type")
   for (col in optional_cols) {
@@ -584,14 +598,45 @@ final_cols <- c(
   "final_support_class", "final_decision", "action", "comment"
 )
 final_df <- base_df[, final_cols, drop = FALSE]
-simple_cols <- c(
+
+pick_source_value <- function(df, source_prefix, value_col) {
+  rna_audit_long[rna_audit_long$source == source_prefix, c("sample_id", value_col), drop = FALSE]
+}
+
+source_simple <- function(source_prefix) {
+  source_df <- rna_audit_long[rna_audit_long$source == source_prefix, c(
+    "sample_id", "expected_sample", "z23_best_match", "z23_ibs_expected",
+    "b25_best_match", "b25_ibs_expected", "support_call", "complete_mismatch"
+  ), drop = FALSE]
+  names(source_df) <- c(
+    "sample_id",
+    paste0(tolower(source_prefix), "_expected"),
+    paste0(tolower(source_prefix), "_z23_match"),
+    paste0(tolower(source_prefix), "_z23_ibs"),
+    paste0(tolower(source_prefix), "_b25_match"),
+    paste0(tolower(source_prefix), "_b25_ibs"),
+    paste0(tolower(source_prefix), "_call"),
+    paste0(tolower(source_prefix), "_complete_mismatch")
+  )
+  source_df
+}
+
+final_simple_df <- final_df[, c(
   "sample_id", "expected_z23", "expected_b25",
-  "dna_primary_call", "dna_best_match", "dna_match_type",
-  "rna_source", "rna_status", "rna_best_match", "rna_support_call",
-  "qc_nearby_class", "qc_rescue_call",
-  "final_support_class", "final_decision", "comment"
-)
-final_simple_df <- final_df[, simple_cols, drop = FALSE]
+  "dna_best_match", "dna_ibs_expected", "dna_primary_call", "dna_match_type",
+  "qc_nearby_class", "qc_rescue_call", "final_decision"
+), drop = FALSE]
+for (src in c("TC", "SC", "FC")) {
+  final_simple_df <- merge(final_simple_df, source_simple(src), by = "sample_id", all.x = TRUE, sort = FALSE)
+}
+final_simple_df <- final_simple_df[, c(
+  "sample_id",
+  "dna_best_match", "dna_ibs_expected", "dna_primary_call", "dna_match_type",
+  "tc_z23_match", "tc_z23_ibs", "tc_b25_match", "tc_b25_ibs", "tc_call",
+  "sc_z23_match", "sc_z23_ibs", "sc_b25_match", "sc_b25_ibs", "sc_call",
+  "fc_z23_match", "fc_z23_ibs", "fc_b25_match", "fc_b25_ibs", "fc_call",
+  "qc_nearby_class", "qc_rescue_call", "final_decision"
+), drop = FALSE]
 
 outdir <- opt[["outdir"]]
 prefix <- opt[["prefix"]]
@@ -676,6 +721,13 @@ write.table(rna_audit_long, file = file.path(outdir, paste0(prefix, "_rna_source
 write.table(rna_source_summary_df, file = file.path(outdir, paste0(prefix, "_rna_source_summary.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
 write.table(rna_audit_long[rna_audit_long$complete_mismatch == "YES", , drop = FALSE], file = file.path(outdir, paste0(prefix, "_rna_complete_mismatch.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
 write.table(genotype_high_similarity_df, file = file.path(outdir, paste0(prefix, "_genotype_high_similarity.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+write.table(
+  genotype_high_similarity_df[, c("sample", "group", "cluster_id", "cluster_size", "high_similarity_neighbor_ids", "max_internal_ibs"), drop = FALSE],
+  file = file.path(outdir, paste0(prefix, "_genotype_high_similarity_simple.tsv")),
+  quote = FALSE,
+  sep = "\t",
+  row.names = FALSE
+)
 write.table(final_df[final_df$qc_rescue_call != "NONE", , drop = FALSE], file = file.path(outdir, paste0(prefix, "_qc_neighbor_rescue.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
 
 write.table(final_df[final_df$final_decision == "REMOVE", , drop = FALSE], file = file.path(outdir, paste0(prefix, "_remove_candidates.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
@@ -692,6 +744,14 @@ for (src in unique(rna_audit_long$source)) {
     sort = FALSE
   )
   write.table(src_df, file = file.path(outdir, paste0(prefix, "_", src, "_judgement.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+  src_simple_df <- src_df[, c(
+    "sample_id", "expected_sample",
+    "z23_best_match", "z23_ibs_expected",
+    "b25_best_match", "b25_ibs_expected",
+    "support_call", "complete_mismatch",
+    "qc_nearby_class", "qc_rescue_call", "final_decision"
+  ), drop = FALSE]
+  write.table(src_simple_df, file = file.path(outdir, paste0(prefix, "_", src, "_judgement_simple.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
 }
 
 write_html_table <- function(df, summary_df, file) {

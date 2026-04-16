@@ -246,6 +246,71 @@ write_static_html_report <- function(pair_summary, summary_df, out_file) {
 
 `%+%` <- function(a, b) paste0(a, b)
 
+write_interactive_html_report <- function(pair_summary, summary_df, out_file) {
+  if (!requireNamespace("DT", quietly = TRUE) ||
+      !requireNamespace("htmltools", quietly = TRUE) ||
+      !requireNamespace("htmlwidgets", quietly = TRUE)) {
+    write_static_html_report(pair_summary, summary_df, out_file)
+    return(invisible(FALSE))
+  }
+
+  decision_colors <- c(MATCH = "#d9ead3", MISMATCH = "#f4cccc", NO_DATA = "#d9d9d9")
+  row_callback <- paste0(
+    "function(row, data) {",
+    "var status = data[", which(names(pair_summary) == "status") - 1, "];",
+    "if (status === 'MATCH') { $(row).css({'background-color':'", decision_colors["MATCH"], "'}); }",
+    "else if (status === 'MISMATCH') { $(row).css({'background-color':'", decision_colors["MISMATCH"], "'}); }",
+    "else if (status === 'NO_DATA') { $(row).css({'background-color':'", decision_colors["NO_DATA"], "'}); }",
+    "}"
+  )
+
+  summary_widget <- DT::datatable(
+    summary_df,
+    rownames = FALSE,
+    filter = "none",
+    options = list(dom = "t", paging = FALSE, ordering = FALSE, autoWidth = TRUE)
+  )
+
+  pair_widget <- DT::datatable(
+    pair_summary,
+    rownames = FALSE,
+    filter = "top",
+    extensions = c("Buttons"),
+    options = list(
+      dom = "Bfrtip",
+      buttons = c("copy", "csv", "excel"),
+      pageLength = 25,
+      autoWidth = TRUE,
+      scrollX = TRUE,
+      rowCallback = DT::JS(row_callback)
+    )
+  )
+
+  page <- htmltools::tagList(
+    htmltools::tags$head(
+      htmltools::tags$meta(charset = "utf-8"),
+      htmltools::tags$style(htmltools::HTML("
+        body { font-family: Arial, sans-serif; margin: 18px; }
+        h1, h2 { margin-bottom: 10px; }
+        .section { margin-bottom: 24px; }
+      "))
+    ),
+    htmltools::tags$h1("Interactive IBS Report"),
+    htmltools::tags$div(class = "section",
+      htmltools::tags$h2("Overall Summary"),
+      summary_widget
+    ),
+    htmltools::tags$div(class = "section",
+      htmltools::tags$h2("Per-sample Pair Summary"),
+      htmltools::tags$p("Use the search box, column filters, sorting, and export buttons to inspect sample results."),
+      pair_widget
+    )
+  )
+
+  htmlwidgets::saveWidget(page, file = out_file, selfcontained = TRUE)
+  invisible(TRUE)
+}
+
 get_upper_triangle_values <- function(m) {
   if (is.null(m) || nrow(m) < 2 || ncol(m) < 2) return(numeric(0))
   m[lower.tri(m, diag = FALSE)]
@@ -456,6 +521,11 @@ write.table(
   quote = FALSE,
   sep = "\t",
   row.names = FALSE
+)
+interactive_ok <- write_interactive_html_report(
+  pair_summary,
+  summary_df,
+  file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_report_interactive.html"))
 )
 write_static_html_report(pair_summary, summary_df, file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_report.html")))
 

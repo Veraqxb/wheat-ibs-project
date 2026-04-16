@@ -199,7 +199,9 @@ resolve_rna_source <- function(df, src) {
   out$rna_status <- ifelse(
     out$z23_status == "MATCH", "MATCH_Z23",
     ifelse(out$b25_status == "MATCH", "MATCH_B25",
-      ifelse((is.na(out$z23_status) | out$z23_status == "NO_DATA") & (is.na(out$b25_status) | out$b25_status == "NO_DATA"), "NO_DATA", "MISMATCH")
+      ifelse(out$z23_status == "SWAPPED" | out$b25_status == "SWAPPED", "SWAPPED",
+        ifelse((is.na(out$z23_status) | out$z23_status == "NO_DATA") & (is.na(out$b25_status) | out$b25_status == "NO_DATA"), "NO_DATA", "MISMATCH")
+      )
     )
   )
   out$rna_best_match <- ifelse(out$rna_status == "MATCH_Z23", out$z23_best, ifelse(out$rna_status == "MATCH_B25", out$b25_best, coalesce_chr(out$z23_best, out$b25_best)))
@@ -264,6 +266,8 @@ base_df$rna_status <- apply(
       "MATCH_Z23"
     } else if (any(x == "MATCH_B25", na.rm = TRUE)) {
       "MATCH_B25"
+    } else if (any(x == "SWAPPED", na.rm = TRUE)) {
+      "SWAPPED"
     } else if (all(is.na(x) | x == "NO_DATA")) {
       "NO_DATA"
     } else {
@@ -343,7 +347,9 @@ base_df$final_decision <- ifelse(
   ifelse(
     base_df$dna_status == "MATCH",
     ifelse(base_df$rna_status == "MATCH_B25", "REVIEW", "KEEP"),
-    ifelse(base_df$rna_status == "MATCH_B25", "RESEQ", ifelse(base_df$rna_status == "MATCH_Z23", "REVIEW", "REMOVE"))
+    ifelse(base_df$dna_status == "SWAPPED", "REVIEW",
+      ifelse(base_df$rna_status == "MATCH_B25", "RESEQ", ifelse(base_df$rna_status == "MATCH_Z23", "REVIEW", "REMOVE"))
+    )
   )
 )
 
@@ -396,6 +402,7 @@ write.table(summary_df, file = file.path(outdir, paste0(prefix, "_final_summary.
 dna_summary_df <- data.frame(
   dataset = prefix,
   dna_match_count = sum(final_df$dna_status == "MATCH", na.rm = TRUE),
+  dna_swapped_count = sum(final_df$dna_status == "SWAPPED", na.rm = TRUE),
   dna_mismatch_count = sum(final_df$dna_status == "MISMATCH", na.rm = TRUE),
   dna_no_data_count = sum(final_df$dna_status == "NO_DATA" | is.na(final_df$dna_status), na.rm = TRUE),
   dna_duplicate_pair_count = sum(!is.na(final_df$dna_duplicate_ids) & final_df$dna_duplicate_ids != "", na.rm = TRUE),
@@ -407,6 +414,7 @@ rna_summary_df <- data.frame(
   dataset = prefix,
   rna_match_z23_count = sum(final_df$rna_status == "MATCH_Z23", na.rm = TRUE),
   rna_match_b25_count = sum(final_df$rna_status == "MATCH_B25", na.rm = TRUE),
+  rna_swapped_count = sum(final_df$rna_status == "SWAPPED", na.rm = TRUE),
   rna_mismatch_count = sum(final_df$rna_status == "MISMATCH", na.rm = TRUE),
   rna_no_data_count = sum(final_df$rna_status == "NO_DATA" | is.na(final_df$rna_status), na.rm = TRUE),
   rna_duplicate_pair_count = sum(!is.na(final_df$rna_duplicate_ids) & final_df$rna_duplicate_ids != "", na.rm = TRUE),

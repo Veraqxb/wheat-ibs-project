@@ -219,6 +219,7 @@ draw_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", show_values
 write_static_html_report <- function(pair_summary, summary_df, out_file) {
   row_color <- function(status) {
     if (status == "MATCH") return("#d9ead3")
+    if (status == "SWAPPED") return("#fce5cd")
     if (status == "MISMATCH") return("#f4cccc")
     if (status == "NO_DATA") return("#d9d9d9")
     "#ffffff"
@@ -254,11 +255,12 @@ write_interactive_html_report <- function(pair_summary, summary_df, out_file) {
     return(invisible(FALSE))
   }
 
-  decision_colors <- c(MATCH = "#d9ead3", MISMATCH = "#f4cccc", NO_DATA = "#d9d9d9")
+  decision_colors <- c(MATCH = "#d9ead3", SWAPPED = "#fce5cd", MISMATCH = "#f4cccc", NO_DATA = "#d9d9d9")
   row_callback <- paste0(
     "function(row, data) {",
     "var status = data[", which(names(pair_summary) == "status") - 1, "];",
     "if (status === 'MATCH') { $(row).css({'background-color':'", decision_colors["MATCH"], "'}); }",
+    "else if (status === 'SWAPPED') { $(row).css({'background-color':'", decision_colors["SWAPPED"], "'}); }",
     "else if (status === 'MISMATCH') { $(row).css({'background-color':'", decision_colors["MISMATCH"], "'}); }",
     "else if (status === 'NO_DATA') { $(row).css({'background-color':'", decision_colors["NO_DATA"], "'}); }",
     "}"
@@ -556,7 +558,9 @@ for (i in seq_len(nrow(pair_summary))) {
 
 pair_summary$status <- ifelse(
   pair_summary$match_type %in% c("1_Unique_Match", "2_Clonal_Match"), "MATCH",
-  ifelse(pair_summary$match_type == "5_No_Data", "NO_DATA", "MISMATCH")
+  ifelse(pair_summary$match_type == "3_Swapped_Mismatch", "SWAPPED",
+    ifelse(pair_summary$match_type == "5_No_Data", "NO_DATA", "MISMATCH")
+  )
 )
 
 summary_df <- data.frame(
@@ -566,6 +570,7 @@ summary_df <- data.frame(
   total_pairs_in_map = nrow(map_df),
   valid_pairs_used = nrow(valid_map),
   matched_pair_count = sum(pair_summary$status == "MATCH", na.rm = TRUE),
+  swapped_pair_count = sum(pair_summary$status == "SWAPPED", na.rm = TRUE),
   mismatched_pair_count = sum(pair_summary$status == "MISMATCH", na.rm = TRUE),
   no_data_pair_count = sum(pair_summary$status == "NO_DATA", na.rm = TRUE),
   unique_match_count = sum(pair_summary$match_type == "1_Unique_Match", na.rm = TRUE),
@@ -688,6 +693,26 @@ if (nrow(mismatch_df) > 0) {
       mismatch_mat,
       file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_Mismatch_Audit.pdf")),
       paste(opt[["prefix"]], "Mismatch Audit"),
+      show_values = TRUE
+    )
+  }
+}
+
+swapped_df <- pair_summary[pair_summary$status == "SWAPPED", , drop = FALSE]
+if (nrow(swapped_df) > 0) {
+  swapped_rows <- swapped_df$sample_y_match
+  swapped_cols <- unique(c(swapped_df$expected_x_match, cols_x_match[match(swapped_df$best_x, cols_x_label)]))
+  swapped_rows <- swapped_rows[!is.na(swapped_rows) & swapped_rows %in% rownames(mat)]
+  swapped_cols <- swapped_cols[!is.na(swapped_cols) & swapped_cols %in% colnames(mat)]
+  if (length(swapped_rows) > 0 && length(swapped_cols) > 0) {
+    swapped_mat <- mat[swapped_rows, swapped_cols, drop = FALSE]
+    rownames(swapped_mat) <- swapped_df$sample_y[match(swapped_rows, swapped_df$sample_y_match)]
+    mapped_cols <- cols_x_label[match(colnames(swapped_mat), cols_x_match)]
+    colnames(swapped_mat) <- ifelse(is.na(mapped_cols), colnames(swapped_mat), mapped_cols)
+    draw_heatmap(
+      swapped_mat,
+      file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_Swapped_Audit.pdf")),
+      paste(opt[["prefix"]], "Swapped Audit"),
       show_values = TRUE
     )
   }
@@ -841,5 +866,6 @@ cat("[6/6] Report completed successfully.\n")
 cat("Available map columns:", paste(available_cols, collapse = ", "), "\n")
 cat("Valid pairs used:", nrow(valid_map), "\n")
 cat("MATCH:", sum(pair_summary$status == "MATCH"), "\n")
+cat("SWAPPED:", sum(pair_summary$status == "SWAPPED"), "\n")
 cat("MISMATCH:", sum(pair_summary$status == "MISMATCH"), "\n")
 cat("NO_DATA:", sum(pair_summary$status == "NO_DATA"), "\n")

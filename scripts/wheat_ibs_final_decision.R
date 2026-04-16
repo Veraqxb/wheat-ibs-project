@@ -43,7 +43,7 @@ read_pair_summary <- function(path, sample_col, expected_col) {
   if (length(miss) > 0) {
     stop("Pair summary missing columns in ", path, ": ", paste(miss, collapse = ", "))
   }
-  optional_cols <- c("second_x", "third_x", "third_best", "high_match_count", "high_match_ids", "duplicate_x_ids")
+  optional_cols <- c("second_x", "third_x", "third_best", "high_match_count", "high_match_ids", "duplicate_x_ids", "match_type")
   for (col in optional_cols) {
     if (!(col %in% colnames(df))) {
       df[[col]] <- if (grepl("count|best", col)) NA_real_ else NA_character_
@@ -132,6 +132,7 @@ names(base_df)[names(base_df) == "high_match_count"] <- "dna_high_match_count"
 names(base_df)[names(base_df) == "high_match_ids"] <- "dna_high_match_ids"
 names(base_df)[names(base_df) == "duplicate_x_ids"] <- "dna_duplicate_ids"
 names(base_df)[names(base_df) == "status"] <- "dna_status"
+names(base_df)[names(base_df) == "match_type"] <- "dna_match_type"
 
 join_rna_summary <- function(df, opt_name, source_name, expected_col) {
   path <- opt[[opt_name]] %||% ""
@@ -373,7 +374,7 @@ base_df$comment <- ifelse(
 
 final_cols <- c(
   "sample_id", "ploidy", "dataset", "expected_z23", "expected_b25", "expected_tc", "expected_sc", "expected_fc",
-  "dna_best_match", "dna_ibs_expected", "dna_ibs_best", "dna_second_match", "dna_second_best", "dna_third_match", "dna_third_best", "dna_margin", "dna_high_match_count", "dna_high_match_ids", "dna_duplicate_ids", "dna_status",
+  "dna_best_match", "dna_ibs_expected", "dna_ibs_best", "dna_second_match", "dna_second_best", "dna_third_match", "dna_third_best", "dna_margin", "dna_high_match_count", "dna_high_match_ids", "dna_duplicate_ids", "dna_match_type", "dna_status",
   "rna_source", "rna_best_match", "rna_second_match", "rna_third_match", "rna_ibs_expected", "rna_margin", "rna_high_match_ids", "rna_duplicate_ids", "rna_status",
   "final_decision", "action", "comment"
 )
@@ -518,6 +519,148 @@ draw_issue_heatmap <- function(mat, file, title) {
   dev.off()
 }
 
+draw_dna_class_heatmap <- function(final_df, out_file, title) {
+  if (!requireNamespace("ggplot2", quietly = TRUE) || nrow(final_df) == 0) return(invisible(NULL))
+  type_levels <- c(
+    "1_Unique_Match",
+    "2_Clonal_Match",
+    "3_Swapped_Mismatch",
+    "4_True_Mismatch",
+    "5_No_Data"
+  )
+  type_labels <- c("Unique", "Clonal", "Swapped", "TrueMismatch", "NoData")
+  type_colors <- c(
+    "1_Unique_Match" = "#0072B2",
+    "2_Clonal_Match" = "#009E73",
+    "3_Swapped_Mismatch" = "#D55E00",
+    "4_True_Mismatch" = "#BDBDBD",
+    "5_No_Data" = "#000000",
+    "inactive" = "#FFFFFF"
+  )
+  plot_df <- do.call(
+    rbind,
+    lapply(seq_len(nrow(final_df)), function(i) {
+      data.frame(
+        sample_id = final_df$sample_id[i],
+        category = factor(type_levels, levels = type_levels),
+        fill_group = ifelse(type_levels == final_df$dna_match_type[i], type_levels, "inactive"),
+        label = ifelse(
+          type_levels == final_df$dna_match_type[i],
+          paste0(final_df$dna_best_match[i] %||% "", ifelse(is.na(final_df$dna_ibs_best[i]), "", sprintf("\n%.3f", final_df$dna_ibs_best[i]))),
+          ""
+        ),
+        stringsAsFactors = FALSE
+      )
+    })
+  )
+  plot_df$sample_id <- factor(plot_df$sample_id, levels = rev(final_df$sample_id))
+
+  pdf(out_file, width = 9, height = max(6, nrow(final_df) * 0.26 + 2.5))
+  print(
+    ggplot2::ggplot(plot_df, ggplot2::aes(x = category, y = sample_id, fill = fill_group)) +
+      ggplot2::geom_tile(color = "grey80", linewidth = 0.3) +
+      ggplot2::geom_text(
+        data = plot_df[plot_df$fill_group != "inactive", , drop = FALSE],
+        ggplot2::aes(label = label),
+        color = "white",
+        size = 2.4,
+        fontface = "bold",
+        lineheight = 0.9
+      ) +
+      ggplot2::scale_fill_manual(values = type_colors, guide = "none") +
+      ggplot2::scale_x_discrete(labels = type_labels) +
+      ggplot2::labs(
+        title = title,
+        subtitle = "DNA genotype pairing classes for each sample",
+        x = "",
+        y = ""
+      ) +
+      ggplot2::theme_bw(base_size = 12) +
+      ggplot2::theme(
+        plot.title = ggplot2::element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = ggplot2::element_text(hjust = 0.5),
+        axis.text.x = ggplot2::element_text(face = "bold"),
+        axis.text.y = ggplot2::element_text(size = 8),
+        panel.grid = ggplot2::element_blank()
+      )
+  )
+  dev.off()
+}
+
+draw_rna_target_heatmap <- function(rna_audit_long, out_file, title) {
+  if (!requireNamespace("ggplot2", quietly = TRUE) || nrow(rna_audit_long) == 0) return(invisible(NULL))
+  status_colors <- c(
+    "MATCH" = "#5ab769",
+    "SWAPPED" = "#e68a2e",
+    "MISMATCH" = "#d64545",
+    "NO_DATA" = "#7f7f7f",
+    "MATCH_Z23" = "#2c7fb8",
+    "MATCH_B25" = "#41ab5d",
+    "blank" = "#FFFFFF"
+  )
+
+  overall_status <- ifelse(
+    rna_audit_long$z23_status == "MATCH", "MATCH_Z23",
+    ifelse(rna_audit_long$b25_status == "MATCH", "MATCH_B25",
+      ifelse(rna_audit_long$z23_status == "SWAPPED" | rna_audit_long$b25_status == "SWAPPED", "SWAPPED",
+        ifelse((is.na(rna_audit_long$z23_status) | rna_audit_long$z23_status == "NO_DATA") &
+                 (is.na(rna_audit_long$b25_status) | rna_audit_long$b25_status == "NO_DATA"), "NO_DATA", "MISMATCH")
+      )
+    )
+  )
+
+  plot_df <- rbind(
+    data.frame(
+      sample_key = paste0(rna_audit_long$source, "_", rna_audit_long$sample_id),
+      panel = "Z23",
+      fill_group = ifelse(is.na(rna_audit_long$z23_status), "blank", rna_audit_long$z23_status),
+      label = ifelse(is.na(rna_audit_long$z23_best_match), "", paste0(rna_audit_long$z23_best_match, ifelse(is.na(rna_audit_long$z23_ibs_expected), "", sprintf("\n%.3f", rna_audit_long$z23_ibs_expected)))),
+      stringsAsFactors = FALSE
+    ),
+    data.frame(
+      sample_key = paste0(rna_audit_long$source, "_", rna_audit_long$sample_id),
+      panel = "B25",
+      fill_group = ifelse(is.na(rna_audit_long$b25_status), "blank", rna_audit_long$b25_status),
+      label = ifelse(is.na(rna_audit_long$b25_best_match), "", paste0(rna_audit_long$b25_best_match, ifelse(is.na(rna_audit_long$b25_ibs_expected), "", sprintf("\n%.3f", rna_audit_long$b25_ibs_expected)))),
+      stringsAsFactors = FALSE
+    ),
+    data.frame(
+      sample_key = paste0(rna_audit_long$source, "_", rna_audit_long$sample_id),
+      panel = "Overall",
+      fill_group = overall_status,
+      label = overall_status,
+      stringsAsFactors = FALSE
+    )
+  )
+
+  ordered_keys <- unique(paste0(rna_audit_long$source, "_", rna_audit_long$sample_id))
+  plot_df$sample_key <- factor(plot_df$sample_key, levels = rev(ordered_keys))
+  plot_df$panel <- factor(plot_df$panel, levels = c("Z23", "B25", "Overall"))
+
+  pdf(out_file, width = 8.5, height = max(6, length(ordered_keys) * 0.24 + 2.5))
+  print(
+    ggplot2::ggplot(plot_df, ggplot2::aes(x = panel, y = sample_key, fill = fill_group)) +
+      ggplot2::geom_tile(color = "grey80", linewidth = 0.3) +
+      ggplot2::geom_text(ggplot2::aes(label = label), size = 2.2, lineheight = 0.9, color = "white", fontface = "bold") +
+      ggplot2::scale_fill_manual(values = status_colors, guide = "none") +
+      ggplot2::labs(
+        title = title,
+        subtitle = "RNA samples are first checked against Z23, then unresolved samples are checked against B25",
+        x = "",
+        y = ""
+      ) +
+      ggplot2::theme_bw(base_size = 12) +
+      ggplot2::theme(
+        plot.title = ggplot2::element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = ggplot2::element_text(hjust = 0.5),
+        axis.text.x = ggplot2::element_text(face = "bold"),
+        axis.text.y = ggplot2::element_text(size = 8),
+        panel.grid = ggplot2::element_blank()
+      )
+  )
+  dev.off()
+}
+
 if (requireNamespace("openxlsx", quietly = TRUE)) {
   wb <- openxlsx::createWorkbook()
   openxlsx::addWorksheet(wb, "final_decision")
@@ -629,5 +772,17 @@ if (nzchar(opt[["dna-ibs-matrix"]]) && file.exists(opt[["dna-ibs-matrix"]])) {
     }
   }
 }
+
+draw_dna_class_heatmap(
+  final_df,
+  file.path(outdir, paste0(prefix, "_dna_classification_heatmap.pdf")),
+  paste(prefix, "DNA Pairing Classification")
+)
+
+draw_rna_target_heatmap(
+  rna_audit_long,
+  file.path(outdir, paste0(prefix, "_rna_target_status_heatmap.pdf")),
+  paste(prefix, "RNA Pairing Audit")
+)
 
 cat("Final decision outputs written to:", outdir, "\n")

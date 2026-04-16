@@ -401,6 +401,85 @@ build_raincloud_df <- function(pair_summary, plot_mode, group_x_label, group_y_l
   rain_df[!is.na(rain_df$IBS), , drop = FALSE]
 }
 
+draw_match_type_heatmap <- function(pair_summary, out_file, title) {
+  if (!requireNamespace("ggplot2", quietly = TRUE) || nrow(pair_summary) == 0) {
+    return(invisible(NULL))
+  }
+
+  type_levels <- c(
+    "1_Unique_Match",
+    "2_Clonal_Match",
+    "3_Swapped_Mismatch",
+    "4_True_Mismatch",
+    "5_No_Data"
+  )
+  type_labels <- c(
+    "Unique",
+    "Clonal",
+    "Swapped",
+    "TrueMismatch",
+    "NoData"
+  )
+  type_colors <- c(
+    "1_Unique_Match" = "#0072B2",
+    "2_Clonal_Match" = "#009E73",
+    "3_Swapped_Mismatch" = "#D55E00",
+    "4_True_Mismatch" = "#BDBDBD",
+    "5_No_Data" = "#000000"
+  )
+
+  plot_df <- do.call(
+    rbind,
+    lapply(seq_len(nrow(pair_summary)), function(i) {
+      data.frame(
+        sample_y = pair_summary$sample_y[i],
+        category = factor(type_levels, levels = type_levels),
+        fill_group = ifelse(type_levels == pair_summary$match_type[i], type_levels, "inactive"),
+        label = ifelse(
+          type_levels == pair_summary$match_type[i],
+          paste0(pair_summary$best_x[i] %||% "", ifelse(is.na(pair_summary$ibs_best[i]), "", sprintf("\n%.3f", pair_summary$ibs_best[i]))),
+          ""
+        ),
+        stringsAsFactors = FALSE
+      )
+    })
+  )
+
+  plot_df$sample_y <- factor(plot_df$sample_y, levels = rev(pair_summary$sample_y))
+  fill_values <- c(type_colors, inactive = "#FFFFFF")
+
+  pdf(out_file, width = 9, height = max(6, nrow(pair_summary) * 0.26 + 2.5))
+  print(
+    ggplot2::ggplot(plot_df, ggplot2::aes(x = category, y = sample_y, fill = fill_group)) +
+      ggplot2::geom_tile(color = "grey80", linewidth = 0.3) +
+      ggplot2::geom_text(
+        data = plot_df[plot_df$fill_group != "inactive", , drop = FALSE],
+        ggplot2::aes(label = label),
+        size = 2.4,
+        lineheight = 0.9,
+        color = "white",
+        fontface = "bold"
+      ) +
+      ggplot2::scale_fill_manual(values = fill_values, guide = "none") +
+      ggplot2::scale_x_discrete(labels = type_labels) +
+      ggplot2::labs(
+        title = title,
+        subtitle = "Each row marks the active DNA pairing class for one sample",
+        x = "",
+        y = ""
+      ) +
+      ggplot2::theme_bw(base_size = 12) +
+      ggplot2::theme(
+        plot.title = ggplot2::element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = ggplot2::element_text(hjust = 0.5),
+        axis.text.x = ggplot2::element_text(face = "bold"),
+        axis.text.y = ggplot2::element_text(size = 8),
+        panel.grid = ggplot2::element_blank()
+      )
+  )
+  dev.off()
+}
+
 cat("[2/6] Building cross-group matrix...\n")
 
 group_y <- resolve_group_ids(map_df, opt[["group-y"]], opt[["group-y-match-col"]], opt[["group-y-match-mode"]])
@@ -614,6 +693,11 @@ write.table(
   quote = FALSE,
   sep = "\t",
   row.names = FALSE
+)
+draw_match_type_heatmap(
+  pair_summary,
+  file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_DNA_match_type_heatmap.pdf")),
+  paste(opt[["prefix"]], "DNA Pairing Classes")
 )
 interactive_ok <- write_interactive_html_report(
   pair_summary,

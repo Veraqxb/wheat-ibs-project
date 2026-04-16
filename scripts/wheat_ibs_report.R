@@ -397,21 +397,12 @@ build_distribution_df <- function(mat, valid_group_y, valid_group_x, pair_summar
   paired_vals <- pair_summary$ibs_expected
   paired_vals <- paired_vals[!is.na(paired_vals)]
 
-  cross_nonpair <- numeric(0)
-  if (length(valid_group_y$match) > 0 && length(valid_group_x$match) > 0) {
-    cross_mat <- mat[valid_group_y$match, valid_group_x$match, drop = FALSE]
-    diag(cross_mat) <- NA
-    cross_nonpair <- as.numeric(cross_mat)
-    cross_nonpair <- cross_nonpair[!is.na(cross_nonpair)]
-  }
-
   dist_df <- data.frame(
-    IBS = c(y_internal, x_internal, paired_vals, cross_nonpair),
+    IBS = c(y_internal, x_internal, paired_vals),
     Category = c(
       rep(paste0(opt[["group-y"]], "_internal"), length(y_internal)),
       rep(paste0(opt[["group-x"]], "_internal"), length(x_internal)),
-      rep("paired_1to1", length(paired_vals)),
-      rep("cross_nonpaired", length(cross_nonpair))
+      rep("paired_1to1", length(paired_vals))
     ),
     stringsAsFactors = FALSE
   )
@@ -421,8 +412,7 @@ build_distribution_df <- function(mat, valid_group_y, valid_group_x, pair_summar
     levels = c(
       paste0(opt[["group-y"]], "_internal"),
       paste0(opt[["group-x"]], "_internal"),
-      "paired_1to1",
-      "cross_nonpaired"
+      "paired_1to1"
     )
   )
   dist_df
@@ -1262,17 +1252,16 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
   dist_df <- build_distribution_df(mat, valid_group_y, valid_group_x, pair_summary)
   if (nrow(dist_df) > 0) {
     if (opt[["plot-mode"]] == "rna") {
-      dist_df <- dist_df[dist_df$Category %in% c(paste0(opt[["group-y"]], "_internal"), "paired_1to1", "cross_nonpaired"), , drop = FALSE]
-      dist_df$Category <- factor(dist_df$Category, levels = c(paste0(opt[["group-y"]], "_internal"), "paired_1to1", "cross_nonpaired"))
-      density_cols <- c("#4575b4", "#d73027", "#fdae61")
-      names(density_cols) <- c(paste0(opt[["group-y"]], "_internal"), "paired_1to1", "cross_nonpaired")
+      dist_df <- dist_df[dist_df$Category %in% c(paste0(opt[["group-y"]], "_internal"), "paired_1to1"), , drop = FALSE]
+      dist_df$Category <- factor(dist_df$Category, levels = c(paste0(opt[["group-y"]], "_internal"), "paired_1to1"))
+      density_cols <- c("#4575b4", "#d73027")
+      names(density_cols) <- c(paste0(opt[["group-y"]], "_internal"), "paired_1to1")
     } else {
-      density_cols <- c("#4575b4", "#74add1", "#d73027", "#fdae61")
+      density_cols <- c("#4575b4", "#74add1", "#d73027")
       names(density_cols) <- c(
         paste0(opt[["group-y"]], "_internal"),
         paste0(opt[["group-x"]], "_internal"),
-        "paired_1to1",
-        "cross_nonpaired"
+        "paired_1to1"
       )
     }
 
@@ -1284,7 +1273,7 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
       scale_fill_manual(values = density_cols) +
       labs(
         title = paste("IBS Density Comparison:", opt[["prefix"]]),
-        subtitle = if (opt[["plot-mode"]] == "dna") "DNA mode: within-group, paired 1-to-1, and cross-group non-paired IBS distributions" else "RNA mode: internal, paired 1-to-1, and cross-group non-paired IBS distributions",
+        subtitle = if (opt[["plot-mode"]] == "dna") "DNA mode: within-group and paired 1-to-1 IBS distributions" else "RNA mode: internal and paired 1-to-1 IBS distributions against Z23",
         x = "IBS",
         y = "Density",
         color = "Category",
@@ -1296,8 +1285,7 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
         plot.subtitle = element_text(hjust = 0.5),
         legend.position = "right",
         panel.grid.minor = element_blank()
-      ) +
-      coord_cartesian(xlim = c(min(0.7, min(dist_df$IBS, na.rm = TRUE)), 1.0))
+      )
 
     density_out <- file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_ibs_density_comparison.pdf"))
     pdf(density_out, width = 9, height = 6.5)

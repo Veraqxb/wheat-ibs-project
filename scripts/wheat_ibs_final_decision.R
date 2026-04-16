@@ -584,12 +584,22 @@ final_cols <- c(
   "final_support_class", "final_decision", "action", "comment"
 )
 final_df <- base_df[, final_cols, drop = FALSE]
+simple_cols <- c(
+  "sample_id", "expected_z23", "expected_b25",
+  "dna_primary_call", "dna_best_match", "dna_match_type",
+  "rna_source", "rna_status", "rna_best_match", "rna_support_call",
+  "qc_nearby_class", "qc_rescue_call",
+  "final_support_class", "final_decision", "comment"
+)
+final_simple_df <- final_df[, simple_cols, drop = FALSE]
 
 outdir <- opt[["outdir"]]
 prefix <- opt[["prefix"]]
 
 write.table(final_df, file = file.path(outdir, paste0(prefix, "_final_decision.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
 write.csv(final_df, file = file.path(outdir, paste0(prefix, "_final_decision.csv")), row.names = FALSE, quote = TRUE)
+write.table(final_simple_df, file = file.path(outdir, paste0(prefix, "_final_decision_simple.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+write.csv(final_simple_df, file = file.path(outdir, paste0(prefix, "_final_decision_simple.csv")), row.names = FALSE, quote = TRUE)
 
 summary_df <- data.frame(
   dataset = prefix,
@@ -721,7 +731,7 @@ write_html_table <- function(df, summary_df, file) {
 }
 
 `%+%` <- function(a, b) paste0(a, b)
-write_html_table(final_df, summary_df, file.path(outdir, paste0(prefix, "_final_decision.html")))
+write_html_table(final_simple_df, summary_df, file.path(outdir, paste0(prefix, "_final_decision.html")))
 
 draw_issue_heatmap <- function(mat, file, title) {
   if (nrow(mat) == 0 || ncol(mat) == 0) return(invisible(NULL))

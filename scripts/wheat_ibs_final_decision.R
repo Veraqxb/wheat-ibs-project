@@ -599,10 +599,6 @@ final_cols <- c(
 )
 final_df <- base_df[, final_cols, drop = FALSE]
 
-pick_source_value <- function(df, source_prefix, value_col) {
-  rna_audit_long[rna_audit_long$source == source_prefix, c("sample_id", value_col), drop = FALSE]
-}
-
 source_simple <- function(source_prefix) {
   source_df <- rna_audit_long[rna_audit_long$source == source_prefix, c(
     "sample_id", "expected_sample", "z23_best_match", "z23_ibs_expected",

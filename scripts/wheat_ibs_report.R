@@ -697,7 +697,8 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
       match_threshold, c_unique, c_clone_in, c_clone_out, c_mismatch, c_nodata
     )
 
-    df_mismatch <- rain_df[rain_df$Match_Type %in% c("4_True_Mismatch", "5_No_Data"), , drop = FALSE]
+    df_true_mismatch <- rain_df[rain_df$Match_Type == "4_True_Mismatch", , drop = FALSE]
+    df_nodata <- rain_df[rain_df$Match_Type == "5_No_Data", , drop = FALSE]
     df_colored <- rain_df[rain_df$Match_Type %in% c("1_Unique_Match", "2_Clonal_Match", "3_Swapped_Mismatch"), , drop = FALSE]
     df_alert <- rain_df[rain_df$IBS < alert_threshold & rain_df$Type == "paired_match", , drop = FALSE]
 
@@ -708,9 +709,11 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
     p_rain <- ggplot() +
       geom_violin(data = rain_df, aes(x = Type, y = IBS, fill = Type), trim = FALSE, alpha = 0.2, color = NA, width = 0.6) +
       geom_boxplot(data = rain_df, aes(x = Type, y = IBS, fill = Type), width = 0.15, outlier.shape = NA, alpha = 0.4, color = "black") +
-      geom_line(data = df_mismatch, aes(x = Type, y = IBS, group = Sample), color = "grey80", alpha = 0.5, linewidth = 0.4) +
+      geom_line(data = df_true_mismatch, aes(x = Type, y = IBS, group = Sample), color = "grey80", alpha = 0.5, linewidth = 0.4) +
+      geom_line(data = df_nodata, aes(x = Type, y = IBS, group = Sample), color = "black", alpha = 0.45, linewidth = 0.45, linetype = "dashed") +
       geom_line(data = df_colored, aes(x = Type, y = IBS, group = Sample, color = Match_Type), linewidth = 0.9, alpha = 0.8) +
-      geom_point(data = df_mismatch, aes(x = Type, y = IBS), fill = "grey75", color = "grey85", size = 2, alpha = 0.5, shape = 21) +
+      geom_point(data = df_true_mismatch, aes(x = Type, y = IBS), fill = "grey75", color = "grey85", size = 2, alpha = 0.5, shape = 21) +
+      geom_point(data = df_nodata, aes(x = Type, y = IBS), fill = "black", color = "black", size = 2.1, alpha = 0.55, shape = 21) +
       geom_point(data = df_colored, aes(x = Type, y = IBS, fill = Type), size = 2.5, alpha = 0.9, shape = 21, color = "white") +
       geom_hline(yintercept = alert_threshold, color = "#d73027", linetype = "dashed", linewidth = 0.8, alpha = 0.7) +
       annotate("text", x = median(seq_along(levels(rain_df$Type))), y = alert_threshold, label = sprintf("IBS = %.2f Alert Baseline", alert_threshold), color = "#d73027", vjust = -0.6, fontface = "bold", size = 4)

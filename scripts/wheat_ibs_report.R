@@ -460,8 +460,14 @@ pair_summary <- data.frame(
   ibs_expected = NA_real_,
   best_x = NA_character_,
   ibs_best = NA_real_,
+  second_x = NA_character_,
   second_best = NA_real_,
+  third_x = NA_character_,
+  third_best = NA_real_,
   margin = NA_real_,
+  high_match_count = NA_integer_,
+  high_match_ids = NA_character_,
+  duplicate_x_ids = NA_character_,
   status = NA_character_,
   stringsAsFactors = FALSE
 )
@@ -478,20 +484,36 @@ for (i in seq_len(nrow(pair_summary))) {
     pair_summary$ibs_expected[i] <- NA_real_
     pair_summary$best_x[i] <- NA_character_
     pair_summary$ibs_best[i] <- NA_real_
+    pair_summary$second_x[i] <- NA_character_
     pair_summary$second_best[i] <- NA_real_
+    pair_summary$third_x[i] <- NA_character_
+    pair_summary$third_best[i] <- NA_real_
     pair_summary$margin[i] <- NA_real_
+    pair_summary$high_match_count[i] <- 0L
+    pair_summary$high_match_ids[i] <- ""
+    pair_summary$duplicate_x_ids[i] <- ""
     pair_summary$status[i] <- "NO_DATA"
     next
   }
   ord <- order(vals, decreasing = TRUE, na.last = TRUE)
   best_idx <- ord[1]
   second_idx <- if (length(ord) >= 2) ord[2] else ord[1]
+  third_idx <- if (length(ord) >= 3) ord[3] else second_idx
+  high_idx <- ord[!is.na(vals[ord]) & vals[ord] >= match_threshold]
+  high_labels <- names(vals)[high_idx]
+  high_pairs <- if (length(high_idx) > 0) paste(sprintf("%s(%.4f)", names(vals)[high_idx], vals[high_idx]), collapse = ";") else ""
 
   pair_summary$ibs_expected[i] <- unname(mat[sample_y_match, expected_x_match])
   pair_summary$best_x[i] <- names(vals)[best_idx]
   pair_summary$ibs_best[i] <- vals[best_idx]
+  pair_summary$second_x[i] <- names(vals)[second_idx]
   pair_summary$second_best[i] <- vals[second_idx]
+  pair_summary$third_x[i] <- names(vals)[third_idx]
+  pair_summary$third_best[i] <- vals[third_idx]
   pair_summary$margin[i] <- ifelse(is.na(vals[best_idx]) || is.na(vals[second_idx]), NA_real_, vals[best_idx] - vals[second_idx])
+  pair_summary$high_match_count[i] <- length(high_idx)
+  pair_summary$high_match_ids[i] <- high_pairs
+  pair_summary$duplicate_x_ids[i] <- if (length(high_labels) > 1) paste(high_labels, collapse = ";") else ""
   pair_summary$status[i] <- ifelse(is.na(pair_summary$best_x[i]), "NO_DATA", ifelse(expected_x == pair_summary$best_x[i], "MATCH", "MISMATCH"))
 }
 
@@ -639,6 +661,26 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
         ifelse(pair_summary$status == "NO_DATA", "5_No_Data", "4_True_Mismatch")
       )
     )
+  )
+
+  detail_summary_df <- data.frame(
+    prefix = opt[["prefix"]],
+    group_y = opt[["group-y"]],
+    group_x = opt[["group-x"]],
+    unique_match_count = sum(pair_summary$match_type == "1_Unique_Match", na.rm = TRUE),
+    clonal_match_count = sum(pair_summary$match_type == "2_Clonal_Match", na.rm = TRUE),
+    swapped_mismatch_count = sum(pair_summary$match_type == "3_Swapped_Mismatch", na.rm = TRUE),
+    true_mismatch_count = sum(pair_summary$match_type == "4_True_Mismatch", na.rm = TRUE),
+    no_data_count = sum(pair_summary$match_type == "5_No_Data", na.rm = TRUE),
+    repeated_pair_count = sum(pair_summary$high_match_count > 1, na.rm = TRUE),
+    stringsAsFactors = FALSE
+  )
+  write.table(
+    detail_summary_df,
+    file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_match_type_summary.tsv")),
+    quote = FALSE,
+    sep = "\t",
+    row.names = FALSE
   )
 
   rain_df <- build_raincloud_df(pair_summary, opt[["plot-mode"]], opt[["group-x"]], opt[["group-y"]])

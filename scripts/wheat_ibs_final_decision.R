@@ -43,6 +43,12 @@ read_pair_summary <- function(path, sample_col, expected_col) {
   if (length(miss) > 0) {
     stop("Pair summary missing columns in ", path, ": ", paste(miss, collapse = ", "))
   }
+  optional_cols <- c("second_x", "third_x", "third_best", "high_match_count", "high_match_ids", "duplicate_x_ids")
+  for (col in optional_cols) {
+    if (!(col %in% colnames(df))) {
+      df[[col]] <- if (grepl("count|best", col)) NA_real_ else NA_character_
+    }
+  }
   names(df)[names(df) == "sample_y"] <- sample_col
   names(df)[names(df) == "expected_x"] <- expected_col
   df
@@ -117,8 +123,14 @@ base_df <- merge(base_df, dna_df, by = c("expected_b25", "expected_z23"), all.x 
 names(base_df)[names(base_df) == "best_x"] <- "dna_best_match"
 names(base_df)[names(base_df) == "ibs_expected"] <- "dna_ibs_expected"
 names(base_df)[names(base_df) == "ibs_best"] <- "dna_ibs_best"
+names(base_df)[names(base_df) == "second_x"] <- "dna_second_match"
 names(base_df)[names(base_df) == "second_best"] <- "dna_second_best"
+names(base_df)[names(base_df) == "third_x"] <- "dna_third_match"
+names(base_df)[names(base_df) == "third_best"] <- "dna_third_best"
 names(base_df)[names(base_df) == "margin"] <- "dna_margin"
+names(base_df)[names(base_df) == "high_match_count"] <- "dna_high_match_count"
+names(base_df)[names(base_df) == "high_match_ids"] <- "dna_high_match_ids"
+names(base_df)[names(base_df) == "duplicate_x_ids"] <- "dna_duplicate_ids"
 names(base_df)[names(base_df) == "status"] <- "dna_status"
 
 join_rna_summary <- function(df, opt_name, source_name, expected_col) {
@@ -126,7 +138,7 @@ join_rna_summary <- function(df, opt_name, source_name, expected_col) {
   if (!nzchar(path)) return(df)
   rna_df <- read_pair_summary(path, expected_col, "rna_expected_target")
   if (is.null(rna_df) || nrow(rna_df) == 0) return(df)
-  keep_cols <- c(expected_col, "ibs_expected", "best_x", "ibs_best", "second_best", "margin", "status")
+  keep_cols <- c(expected_col, "ibs_expected", "best_x", "ibs_best", "second_x", "second_best", "third_x", "third_best", "margin", "high_match_count", "high_match_ids", "duplicate_x_ids", "status")
   rna_df <- rna_df[, keep_cols, drop = FALSE]
   suffix <- tolower(source_name)
   names(rna_df) <- c(
@@ -134,8 +146,14 @@ join_rna_summary <- function(df, opt_name, source_name, expected_col) {
     paste0(suffix, "_ibs_expected"),
     paste0(suffix, "_best_match"),
     paste0(suffix, "_ibs_best"),
+    paste0(suffix, "_second_match"),
     paste0(suffix, "_second_best"),
+    paste0(suffix, "_third_match"),
+    paste0(suffix, "_third_best"),
     paste0(suffix, "_margin"),
+    paste0(suffix, "_high_match_count"),
+    paste0(suffix, "_high_match_ids"),
+    paste0(suffix, "_duplicate_ids"),
     paste0(suffix, "_status")
   )
   merge(df, rna_df, by = expected_col, all.x = TRUE, sort = FALSE)
@@ -163,10 +181,18 @@ resolve_rna_source <- function(df, src) {
     b25_status = if (b_col %in% names(df)) df[[b_col]] else NA_character_,
     z23_best = if (tolower(paste0(src, "_z23_best_match")) %in% names(df)) df[[tolower(paste0(src, "_z23_best_match"))]] else NA_character_,
     b25_best = if (tolower(paste0(src, "_b25_best_match")) %in% names(df)) df[[tolower(paste0(src, "_b25_best_match"))]] else NA_character_,
+    z23_second = if (tolower(paste0(src, "_z23_second_match")) %in% names(df)) df[[tolower(paste0(src, "_z23_second_match"))]] else NA_character_,
+    b25_second = if (tolower(paste0(src, "_b25_second_match")) %in% names(df)) df[[tolower(paste0(src, "_b25_second_match"))]] else NA_character_,
+    z23_third = if (tolower(paste0(src, "_z23_third_match")) %in% names(df)) df[[tolower(paste0(src, "_z23_third_match"))]] else NA_character_,
+    b25_third = if (tolower(paste0(src, "_b25_third_match")) %in% names(df)) df[[tolower(paste0(src, "_b25_third_match"))]] else NA_character_,
     z23_ibs = if (tolower(paste0(src, "_z23_ibs_expected")) %in% names(df)) df[[tolower(paste0(src, "_z23_ibs_expected"))]] else NA_real_,
     b25_ibs = if (tolower(paste0(src, "_b25_ibs_expected")) %in% names(df)) df[[tolower(paste0(src, "_b25_ibs_expected"))]] else NA_real_,
     z23_margin = if (tolower(paste0(src, "_z23_margin")) %in% names(df)) df[[tolower(paste0(src, "_z23_margin"))]] else NA_real_,
     b25_margin = if (tolower(paste0(src, "_b25_margin")) %in% names(df)) df[[tolower(paste0(src, "_b25_margin"))]] else NA_real_,
+    z23_high_match_ids = if (tolower(paste0(src, "_z23_high_match_ids")) %in% names(df)) df[[tolower(paste0(src, "_z23_high_match_ids"))]] else NA_character_,
+    b25_high_match_ids = if (tolower(paste0(src, "_b25_high_match_ids")) %in% names(df)) df[[tolower(paste0(src, "_b25_high_match_ids"))]] else NA_character_,
+    z23_duplicate_ids = if (tolower(paste0(src, "_z23_duplicate_ids")) %in% names(df)) df[[tolower(paste0(src, "_z23_duplicate_ids"))]] else NA_character_,
+    b25_duplicate_ids = if (tolower(paste0(src, "_b25_duplicate_ids")) %in% names(df)) df[[tolower(paste0(src, "_b25_duplicate_ids"))]] else NA_character_,
     stringsAsFactors = FALSE
   )
 
@@ -177,8 +203,12 @@ resolve_rna_source <- function(df, src) {
     )
   )
   out$rna_best_match <- ifelse(out$rna_status == "MATCH_Z23", out$z23_best, ifelse(out$rna_status == "MATCH_B25", out$b25_best, coalesce_chr(out$z23_best, out$b25_best)))
+  out$rna_second_match <- ifelse(out$rna_status == "MATCH_Z23", out$z23_second, ifelse(out$rna_status == "MATCH_B25", out$b25_second, coalesce_chr(out$z23_second, out$b25_second)))
+  out$rna_third_match <- ifelse(out$rna_status == "MATCH_Z23", out$z23_third, ifelse(out$rna_status == "MATCH_B25", out$b25_third, coalesce_chr(out$z23_third, out$b25_third)))
   out$rna_ibs_expected <- ifelse(out$rna_status == "MATCH_B25", out$b25_ibs, out$z23_ibs)
   out$rna_margin <- ifelse(out$rna_status == "MATCH_B25", out$b25_margin, out$z23_margin)
+  out$rna_high_match_ids <- ifelse(out$rna_status == "MATCH_B25", out$b25_high_match_ids, out$z23_high_match_ids)
+  out$rna_duplicate_ids <- ifelse(out$rna_status == "MATCH_B25", out$b25_duplicate_ids, out$z23_duplicate_ids)
   out
 }
 
@@ -220,6 +250,24 @@ base_df$rna_best_match <- apply(
   }
 )
 
+base_df$rna_second_match <- apply(
+  do.call(cbind, lapply(rna_details, function(x) x$rna_second_match)),
+  1,
+  function(x) {
+    x <- x[!is.na(x) & x != ""]
+    if (length(x) == 0) NA_character_ else x[1]
+  }
+)
+
+base_df$rna_third_match <- apply(
+  do.call(cbind, lapply(rna_details, function(x) x$rna_third_match)),
+  1,
+  function(x) {
+    x <- x[!is.na(x) & x != ""]
+    if (length(x) == 0) NA_character_ else x[1]
+  }
+)
+
 base_df$rna_ibs_expected <- apply(
   do.call(cbind, lapply(rna_details, function(x) x$rna_ibs_expected)),
   1,
@@ -237,6 +285,24 @@ base_df$rna_margin <- apply(
     x <- suppressWarnings(as.numeric(x))
     x <- x[!is.na(x)]
     if (length(x) == 0) NA_real_ else max(x)
+  }
+)
+
+base_df$rna_high_match_ids <- apply(
+  do.call(cbind, lapply(rna_details, function(x) x$rna_high_match_ids)),
+  1,
+  function(x) {
+    x <- x[!is.na(x) & x != ""]
+    if (length(x) == 0) NA_character_ else x[1]
+  }
+)
+
+base_df$rna_duplicate_ids <- apply(
+  do.call(cbind, lapply(rna_details, function(x) x$rna_duplicate_ids)),
+  1,
+  function(x) {
+    x <- x[!is.na(x) & x != ""]
+    if (length(x) == 0) NA_character_ else x[1]
   }
 )
 
@@ -270,8 +336,8 @@ base_df$comment <- ifelse(
 
 final_cols <- c(
   "sample_id", "ploidy", "dataset", "expected_z23", "expected_b25", "expected_tc", "expected_sc", "expected_fc",
-  "dna_best_match", "dna_ibs_expected", "dna_ibs_best", "dna_second_best", "dna_margin", "dna_status",
-  "rna_source", "rna_best_match", "rna_ibs_expected", "rna_margin", "rna_status",
+  "dna_best_match", "dna_ibs_expected", "dna_ibs_best", "dna_second_match", "dna_second_best", "dna_third_match", "dna_third_best", "dna_margin", "dna_high_match_count", "dna_high_match_ids", "dna_duplicate_ids", "dna_status",
+  "rna_source", "rna_best_match", "rna_second_match", "rna_third_match", "rna_ibs_expected", "rna_margin", "rna_high_match_ids", "rna_duplicate_ids", "rna_status",
   "final_decision", "action", "comment"
 )
 final_df <- base_df[, final_cols, drop = FALSE]
@@ -295,6 +361,27 @@ summary_df <- data.frame(
   stringsAsFactors = FALSE
 )
 write.table(summary_df, file = file.path(outdir, paste0(prefix, "_final_summary.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+
+dna_summary_df <- data.frame(
+  dataset = prefix,
+  dna_match_count = sum(final_df$dna_status == "MATCH", na.rm = TRUE),
+  dna_mismatch_count = sum(final_df$dna_status == "MISMATCH", na.rm = TRUE),
+  dna_no_data_count = sum(final_df$dna_status == "NO_DATA" | is.na(final_df$dna_status), na.rm = TRUE),
+  dna_duplicate_pair_count = sum(!is.na(final_df$dna_duplicate_ids) & final_df$dna_duplicate_ids != "", na.rm = TRUE),
+  stringsAsFactors = FALSE
+)
+write.table(dna_summary_df, file = file.path(outdir, paste0(prefix, "_dna_summary.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+
+rna_summary_df <- data.frame(
+  dataset = prefix,
+  rna_match_z23_count = sum(final_df$rna_status == "MATCH_Z23", na.rm = TRUE),
+  rna_match_b25_count = sum(final_df$rna_status == "MATCH_B25", na.rm = TRUE),
+  rna_mismatch_count = sum(final_df$rna_status == "MISMATCH", na.rm = TRUE),
+  rna_no_data_count = sum(final_df$rna_status == "NO_DATA" | is.na(final_df$rna_status), na.rm = TRUE),
+  rna_duplicate_pair_count = sum(!is.na(final_df$rna_duplicate_ids) & final_df$rna_duplicate_ids != "", na.rm = TRUE),
+  stringsAsFactors = FALSE
+)
+write.table(rna_summary_df, file = file.path(outdir, paste0(prefix, "_rna_summary.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
 
 write.table(final_df[final_df$final_decision == "REMOVE", , drop = FALSE], file = file.path(outdir, paste0(prefix, "_remove_candidates.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
 write.table(final_df[final_df$final_decision == "RESEQ", , drop = FALSE], file = file.path(outdir, paste0(prefix, "_reseq_candidates.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)

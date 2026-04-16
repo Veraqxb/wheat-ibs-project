@@ -460,13 +460,14 @@ draw_match_type_heatmap <- function(pair_summary, out_file, title) {
     return(invisible(NULL))
   }
 
-  type_levels <- c("CONFIRMED_Z23", "SWAPPED_Z23", "UNSUPPORTED", "NO_DATA")
-  type_labels <- c("Confirmed", "Swapped", "Unsupported", "NoData")
+  type_levels <- c("Z23_Confirmed", "Z23_Duplicate", "Z23_Swapped", "Z23_Unmatched", "No_Data")
+  type_labels <- c("Confirmed", "Duplicate", "Swapped", "Unmatched", "NoData")
   type_colors <- c(
-    "CONFIRMED_Z23" = "#2c7fb8",
-    "SWAPPED_Z23" = "#D55E00",
-    "UNSUPPORTED" = "#d64545",
-    "NO_DATA" = "#7f7f7f"
+    "Z23_Confirmed" = "#2c7fb8",
+    "Z23_Duplicate" = "#41ab5d",
+    "Z23_Swapped" = "#D55E00",
+    "Z23_Unmatched" = "#d64545",
+    "No_Data" = "#7f7f7f"
   )
 
   plot_df <- do.call(
@@ -475,7 +476,7 @@ draw_match_type_heatmap <- function(pair_summary, out_file, title) {
       data.frame(
         sample_y = pair_summary$sample_y[i],
         category = factor(type_levels, levels = type_levels),
-        fill_group = ifelse(type_levels == pair_summary$primary_call[i], type_levels, "inactive"),
+        fill_group = ifelse(type_levels == pair_summary$reference_class[i], type_levels, "inactive"),
         label = ifelse(
           type_levels == pair_summary$primary_call[i],
           paste0(
@@ -509,7 +510,7 @@ draw_match_type_heatmap <- function(pair_summary, out_file, title) {
       ggplot2::scale_x_discrete(labels = type_labels) +
       ggplot2::labs(
         title = title,
-        subtitle = "Z23-centered DNA call; duplicated high-IBS pairs are marked with [dup]",
+        subtitle = "Z23-centered DNA classes; duplicate-support samples are marked with [dup]",
         x = "",
         y = ""
       ) +
@@ -687,10 +688,19 @@ pair_summary$status <- ifelse(
   )
 )
 
+pair_summary$reference_class <- ifelse(
+  pair_summary$match_type == "1_Unique_Match", "Z23_Confirmed",
+  ifelse(
+    pair_summary$match_type == "2_Clonal_Match", "Z23_Duplicate",
+    ifelse(pair_summary$match_type == "3_Swapped_Mismatch", "Z23_Swapped",
+      ifelse(pair_summary$match_type == "5_No_Data", "No_Data", "Z23_Unmatched")
+    )
+  )
+)
 pair_summary$primary_call <- ifelse(
-  pair_summary$match_type %in% c("1_Unique_Match", "2_Clonal_Match"), "CONFIRMED_Z23",
-  ifelse(pair_summary$match_type == "3_Swapped_Mismatch", "SWAPPED_Z23",
-    ifelse(pair_summary$match_type == "5_No_Data", "NO_DATA", "UNSUPPORTED")
+  pair_summary$reference_class %in% c("Z23_Confirmed", "Z23_Duplicate"), "KEEP_Z23",
+  ifelse(pair_summary$reference_class == "Z23_Swapped", "REVIEW_SWAP",
+    ifelse(pair_summary$reference_class == "No_Data", "NO_DATA", "DROP_Z23")
   )
 )
 pair_summary$duplicate_flag <- ifelse(pair_summary$match_type == "2_Clonal_Match", "YES", "NO")
@@ -709,10 +719,11 @@ summary_df <- data.frame(
   clonal_match_count = sum(pair_summary$match_type == "2_Clonal_Match", na.rm = TRUE),
   swapped_mismatch_count = sum(pair_summary$match_type == "3_Swapped_Mismatch", na.rm = TRUE),
   true_mismatch_count = sum(pair_summary$match_type == "4_True_Mismatch", na.rm = TRUE),
-  confirmed_z23_count = sum(pair_summary$primary_call == "CONFIRMED_Z23", na.rm = TRUE),
-  swapped_z23_count = sum(pair_summary$primary_call == "SWAPPED_Z23", na.rm = TRUE),
-  unsupported_count = sum(pair_summary$primary_call == "UNSUPPORTED", na.rm = TRUE),
-  no_data_count = sum(pair_summary$primary_call == "NO_DATA", na.rm = TRUE),
+  z23_confirmed_count = sum(pair_summary$reference_class == "Z23_Confirmed", na.rm = TRUE),
+  z23_duplicate_count = sum(pair_summary$reference_class == "Z23_Duplicate", na.rm = TRUE),
+  z23_swapped_count = sum(pair_summary$reference_class == "Z23_Swapped", na.rm = TRUE),
+  z23_unmatched_count = sum(pair_summary$reference_class == "Z23_Unmatched", na.rm = TRUE),
+  no_data_count = sum(pair_summary$reference_class == "No_Data", na.rm = TRUE),
   duplicate_pair_count = sum(pair_summary$duplicate_flag == "YES", na.rm = TRUE),
   stringsAsFactors = FALSE
 )
@@ -739,8 +750,29 @@ write.table(
   row.names = FALSE
 )
 write.table(
+  pair_summary[pair_summary$reference_class == "Z23_Confirmed", , drop = FALSE],
+  file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_z23_confirmed_samples.tsv")),
+  quote = FALSE,
+  sep = "\t",
+  row.names = FALSE
+)
+write.table(
+  pair_summary[pair_summary$reference_class == "Z23_Duplicate", , drop = FALSE],
+  file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_z23_duplicate_samples.tsv")),
+  quote = FALSE,
+  sep = "\t",
+  row.names = FALSE
+)
+write.table(
   pair_summary[pair_summary$match_type == "4_True_Mismatch", , drop = FALSE],
   file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_true_mismatch_samples.tsv")),
+  quote = FALSE,
+  sep = "\t",
+  row.names = FALSE
+)
+write.table(
+  pair_summary[pair_summary$reference_class == "Z23_Unmatched", , drop = FALSE],
+  file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_z23_unmatched_samples.tsv")),
   quote = FALSE,
   sep = "\t",
   row.names = FALSE
@@ -892,18 +924,22 @@ run_rna_decision_module <- function() {
     z23_failure <- collect_failure_reason(decision_df$best_z23_ibs[i], decision_df$delta_z23[i], decision_df$expr_score_z23[i], "Z23")
     b25_failure <- collect_failure_reason(decision_df$best_b25_ibs[i], decision_df$delta_b25[i], decision_df$expr_score_b25[i], "B25")
 
-    if (z23_reliable && b25_reliable && decision_df$consistency_flag[i] == "Conflict") {
-      decision_df$primary_class[i] <- "Unresolved_Drop"
-      decision_df$diagnostic_class[i] <- "Both_conflict"
-      decision_df$failure_reason[i] <- "Both reliable but conflicting targets"
-    } else if (z23_reliable) {
+    if (z23_reliable) {
       decision_df$primary_class[i] <- "Primary_Z23"
-      decision_df$diagnostic_class[i] <- "Z23_direct_match"
+      decision_df$diagnostic_class[i] <- ifelse(
+        b25_reliable && decision_df$consistency_flag[i] == "Conflict",
+        "Z23_priority_B25_conflict",
+        ifelse(b25_reliable, "Z23_supported_by_B25", "Z23_direct_match")
+      )
       decision_df$failure_reason[i] <- ""
     } else if (b25_reliable) {
       decision_df$primary_class[i] <- "Rescued_by_B25"
       decision_df$diagnostic_class[i] <- "B25_rescued"
       decision_df$failure_reason[i] <- z23_failure
+    } else if (all(is.na(c(decision_df$best_z23_ibs[i], decision_df$best_b25_ibs[i])))) {
+      decision_df$primary_class[i] <- "Unresolved_Drop"
+      decision_df$diagnostic_class[i] <- "No_data"
+      decision_df$failure_reason[i] <- "No valid IBS data for Z23 or B25"
     } else if ((!is.na(decision_df$best_z23_ibs[i]) && decision_df$best_z23_ibs[i] >= match_threshold) || (!is.na(decision_df$delta_z23[i]) && decision_df$delta_z23[i] > 0)) {
       decision_df$primary_class[i] <- "Unresolved_Drop"
       decision_df$diagnostic_class[i] <- "Z23_ambiguous"
@@ -918,6 +954,8 @@ run_rna_decision_module <- function() {
   write.table(decision_df, file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_decision_table.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
   write.table(decision_df[decision_df$primary_class != "Unresolved_Drop", , drop = FALSE], file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_kept_samples.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
   write.table(decision_df[decision_df$primary_class == "Unresolved_Drop", , drop = FALSE], file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_dropped_samples.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+  write.table(decision_df[decision_df$primary_class == "Rescued_by_B25", , drop = FALSE], file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_rescued_by_b25.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+  write.table(decision_df[decision_df$diagnostic_class %in% c("Unmatched_drop", "No_data"), , drop = FALSE], file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_unresolved_drop.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
 
   class_summary <- data.frame(
     prefix = opt[["prefix"]],
@@ -925,10 +963,12 @@ run_rna_decision_module <- function() {
     rescued_by_b25_count = sum(decision_df$primary_class == "Rescued_by_B25", na.rm = TRUE),
     unresolved_drop_count = sum(decision_df$primary_class == "Unresolved_Drop", na.rm = TRUE),
     z23_direct_match_count = sum(decision_df$diagnostic_class == "Z23_direct_match", na.rm = TRUE),
+    z23_supported_by_b25_count = sum(decision_df$diagnostic_class == "Z23_supported_by_B25", na.rm = TRUE),
+    z23_priority_b25_conflict_count = sum(decision_df$diagnostic_class == "Z23_priority_B25_conflict", na.rm = TRUE),
     z23_ambiguous_count = sum(decision_df$diagnostic_class == "Z23_ambiguous", na.rm = TRUE),
     b25_rescued_count = sum(decision_df$diagnostic_class == "B25_rescued", na.rm = TRUE),
-    both_conflict_count = sum(decision_df$diagnostic_class == "Both_conflict", na.rm = TRUE),
     unmatched_drop_count = sum(decision_df$diagnostic_class == "Unmatched_drop", na.rm = TRUE),
+    no_data_count = sum(decision_df$diagnostic_class == "No_data", na.rm = TRUE),
     stringsAsFactors = FALSE
   )
   write.table(class_summary, file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_class_summary.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
@@ -976,8 +1016,16 @@ run_rna_decision_module <- function() {
     if (requireNamespace("ggalluvial", quietly = TRUE)) {
       sankey_df <- data.frame(
         source = "RNA",
-        z23_path = ifelse(decision_df$diagnostic_class %in% c("Z23_direct_match", "Z23_ambiguous", "Both_conflict"), decision_df$diagnostic_class, "Z23_fail"),
-        b25_path = ifelse(decision_df$diagnostic_class == "B25_rescued", "B25_rescue", ifelse(decision_df$diagnostic_class == "Both_conflict", "B25_conflict", "B25_fail")),
+        z23_path = ifelse(decision_df$diagnostic_class %in% c("Z23_direct_match", "Z23_supported_by_B25", "Z23_priority_B25_conflict", "Z23_ambiguous"), decision_df$diagnostic_class, "Z23_fail"),
+        b25_path = ifelse(
+          decision_df$diagnostic_class == "B25_rescued",
+          "B25_rescue",
+          ifelse(
+            decision_df$diagnostic_class == "Z23_priority_B25_conflict",
+            "B25_conflict",
+            ifelse(decision_df$diagnostic_class == "No_data", "B25_no_data", "B25_fail")
+          )
+        ),
         outcome = decision_df$primary_class,
         stringsAsFactors = FALSE
       )

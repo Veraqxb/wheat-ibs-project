@@ -216,6 +216,37 @@ rna_sources <- c("tc", "sc", "fc")
 rna_details <- lapply(rna_sources, function(src) resolve_rna_source(base_df, src))
 names(rna_details) <- toupper(rna_sources)
 
+rna_audit_long <- do.call(
+  rbind,
+  lapply(rna_sources, function(src) {
+    det <- rna_details[[toupper(src)]]
+    data.frame(
+      sample_id = base_df$sample_id,
+      ploidy = opt[["ploidy"]],
+      source = toupper(src),
+      expected_sample = det$expected_sample,
+      z23_status = det$z23_status,
+      b25_status = det$b25_status,
+      z23_best_match = det$z23_best,
+      z23_second_match = det$z23_second,
+      z23_third_match = det$z23_third,
+      z23_ibs_expected = det$z23_ibs,
+      z23_margin = det$z23_margin,
+      z23_high_match_ids = det$z23_high_match_ids,
+      z23_duplicate_ids = det$z23_duplicate_ids,
+      b25_best_match = det$b25_best,
+      b25_second_match = det$b25_second,
+      b25_third_match = det$b25_third,
+      b25_ibs_expected = det$b25_ibs,
+      b25_margin = det$b25_margin,
+      b25_high_match_ids = det$b25_high_match_ids,
+      b25_duplicate_ids = det$b25_duplicate_ids,
+      complete_mismatch = ifelse(det$z23_status == "MISMATCH" & det$b25_status == "MISMATCH", "YES", "NO"),
+      stringsAsFactors = FALSE
+    )
+  })
+)
+
 base_df$rna_source <- apply(
   do.call(cbind, lapply(rna_details, function(x) x$rna_status)),
   1,
@@ -382,6 +413,24 @@ rna_summary_df <- data.frame(
   stringsAsFactors = FALSE
 )
 write.table(rna_summary_df, file = file.path(outdir, paste0(prefix, "_rna_summary.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+
+rna_source_summary_df <- do.call(
+  rbind,
+  lapply(unique(rna_audit_long$source), function(src) {
+    sub_df <- rna_audit_long[rna_audit_long$source == src, , drop = FALSE]
+    data.frame(
+      source = src,
+      total_samples = nrow(sub_df),
+      z23_match_count = sum(sub_df$z23_status == "MATCH", na.rm = TRUE),
+      b25_match_count = sum(sub_df$b25_status == "MATCH", na.rm = TRUE),
+      complete_mismatch_count = sum(sub_df$complete_mismatch == "YES", na.rm = TRUE),
+      stringsAsFactors = FALSE
+    )
+  })
+)
+write.table(rna_audit_long, file = file.path(outdir, paste0(prefix, "_rna_source_audit.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+write.table(rna_source_summary_df, file = file.path(outdir, paste0(prefix, "_rna_source_summary.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+write.table(rna_audit_long[rna_audit_long$complete_mismatch == "YES", , drop = FALSE], file = file.path(outdir, paste0(prefix, "_rna_complete_mismatch.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
 
 write.table(final_df[final_df$final_decision == "REMOVE", , drop = FALSE], file = file.path(outdir, paste0(prefix, "_remove_candidates.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
 write.table(final_df[final_df$final_decision == "RESEQ", , drop = FALSE], file = file.path(outdir, paste0(prefix, "_reseq_candidates.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)

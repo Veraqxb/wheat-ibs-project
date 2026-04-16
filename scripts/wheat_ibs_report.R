@@ -517,12 +517,46 @@ for (i in seq_len(nrow(pair_summary))) {
   pair_summary$status[i] <- ifelse(is.na(pair_summary$best_x[i]), "NO_DATA", ifelse(expected_x == pair_summary$best_x[i], "MATCH", "MISMATCH"))
 }
 
-write.table(
-  pair_summary,
-  file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_pair_summary.tsv")),
-  quote = FALSE,
-  sep = "\t",
-  row.names = FALSE
+pair_summary$ibs_y_background <- NA_real_
+pair_summary$ibs_x_background <- NA_real_
+for (i in seq_len(nrow(pair_summary))) {
+  sy <- pair_summary$sample_y_match[i]
+  sx <- pair_summary$expected_x_match[i]
+  other_y <- pair_summary$sample_y_match[-i]
+  other_y <- other_y[!is.na(other_y) & other_y %in% rownames(mat)]
+  if (length(other_y) > 0 && sy %in% rownames(mat)) {
+    pair_summary$ibs_y_background[i] <- mean(mat[sy, other_y], na.rm = TRUE)
+  }
+  other_x <- pair_summary$expected_x_match[-i]
+  other_x <- other_x[!is.na(other_x) & other_x %in% rownames(mat)]
+  if (length(other_x) > 0 && sx %in% rownames(mat)) {
+    pair_summary$ibs_x_background[i] <- mean(mat[sx, other_x], na.rm = TRUE)
+  }
+}
+
+pair_summary$match_type <- NA_character_
+
+for (i in seq_len(nrow(pair_summary))) {
+  if (pair_summary$status[i] == "NO_DATA") {
+    pair_summary$match_type[i] <- "5_No_Data"
+  } else if (!is.na(pair_summary$ibs_expected[i]) &&
+             pair_summary$ibs_expected[i] >= match_threshold &&
+             pair_summary$best_x[i] == pair_summary$expected_x[i]) {
+    if (!is.na(pair_summary$high_match_count[i]) && pair_summary$high_match_count[i] > 1) {
+      pair_summary$match_type[i] <- "2_Clonal_Match"
+    } else {
+      pair_summary$match_type[i] <- "1_Unique_Match"
+    }
+  } else if (!is.na(pair_summary$ibs_best[i]) && pair_summary$ibs_best[i] >= match_threshold) {
+    pair_summary$match_type[i] <- "3_Swapped_Mismatch"
+  } else {
+    pair_summary$match_type[i] <- "4_True_Mismatch"
+  }
+}
+
+pair_summary$status <- ifelse(
+  pair_summary$match_type %in% c("1_Unique_Match", "2_Clonal_Match"), "MATCH",
+  ifelse(pair_summary$match_type == "5_No_Data", "NO_DATA", "MISMATCH")
 )
 
 summary_df <- data.frame(
@@ -531,15 +565,47 @@ summary_df <- data.frame(
   group_x = opt[["group-x"]],
   total_pairs_in_map = nrow(map_df),
   valid_pairs_used = nrow(valid_map),
-  matched_pair_count = sum(pair_summary$status == "MATCH"),
-  mismatched_pair_count = sum(pair_summary$status == "MISMATCH"),
-  no_data_pair_count = sum(pair_summary$status == "NO_DATA"),
+  matched_pair_count = sum(pair_summary$status == "MATCH", na.rm = TRUE),
+  mismatched_pair_count = sum(pair_summary$status == "MISMATCH", na.rm = TRUE),
+  no_data_pair_count = sum(pair_summary$status == "NO_DATA", na.rm = TRUE),
+  unique_match_count = sum(pair_summary$match_type == "1_Unique_Match", na.rm = TRUE),
+  clonal_match_count = sum(pair_summary$match_type == "2_Clonal_Match", na.rm = TRUE),
+  swapped_mismatch_count = sum(pair_summary$match_type == "3_Swapped_Mismatch", na.rm = TRUE),
+  true_mismatch_count = sum(pair_summary$match_type == "4_True_Mismatch", na.rm = TRUE),
   stringsAsFactors = FALSE
 )
 
 write.table(
+  pair_summary,
+  file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_pair_summary.tsv")),
+  quote = FALSE,
+  sep = "\t",
+  row.names = FALSE
+)
+write.table(
   summary_df,
   file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_summary.tsv")),
+  quote = FALSE,
+  sep = "\t",
+  row.names = FALSE
+)
+write.table(
+  pair_summary[pair_summary$match_type == "3_Swapped_Mismatch", , drop = FALSE],
+  file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_swapped_mismatch_samples.tsv")),
+  quote = FALSE,
+  sep = "\t",
+  row.names = FALSE
+)
+write.table(
+  pair_summary[pair_summary$match_type == "4_True_Mismatch", , drop = FALSE],
+  file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_true_mismatch_samples.tsv")),
+  quote = FALSE,
+  sep = "\t",
+  row.names = FALSE
+)
+write.table(
+  pair_summary[pair_summary$match_type == "5_No_Data", , drop = FALSE],
+  file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_no_data_samples.tsv")),
   quote = FALSE,
   sep = "\t",
   row.names = FALSE
@@ -631,57 +697,6 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
   cat("[6/8] Drawing raincloud and density distribution plots...\n")
   library(ggplot2)
   has_ggrepel <- requireNamespace("ggrepel", quietly = TRUE)
-
-  pair_summary$ibs_y_background <- NA_real_
-  pair_summary$ibs_x_background <- NA_real_
-  for (i in seq_len(nrow(pair_summary))) {
-    sy <- pair_summary$sample_y_match[i]
-    sx <- pair_summary$expected_x_match[i]
-    other_y <- pair_summary$sample_y_match[-i]
-    other_y <- other_y[!is.na(other_y) & other_y %in% rownames(mat)]
-    if (length(other_y) > 0 && sy %in% rownames(mat)) {
-      pair_summary$ibs_y_background[i] <- mean(mat[sy, other_y], na.rm = TRUE)
-    }
-    other_x <- pair_summary$expected_x_match[-i]
-    other_x <- other_x[!is.na(other_x) & other_x %in% rownames(mat)]
-    if (length(other_x) > 0 && sx %in% rownames(mat)) {
-      pair_summary$ibs_x_background[i] <- mean(mat[sx, other_x], na.rm = TRUE)
-    }
-  }
-
-  pair_summary$match_type <- ifelse(
-    pair_summary$status == "MATCH" & !is.na(pair_summary$ibs_expected) & pair_summary$ibs_expected >= match_threshold & !is.na(pair_summary$margin) & pair_summary$margin >= 0.01,
-    "1_Unique_Match",
-    ifelse(
-      pair_summary$status == "MATCH" & !is.na(pair_summary$ibs_expected) & pair_summary$ibs_expected >= match_threshold,
-      "2_Clonal_Match",
-      ifelse(
-        pair_summary$status == "MISMATCH" & !is.na(pair_summary$ibs_best) & pair_summary$ibs_best >= match_threshold,
-        "3_Swapped_Mismatch",
-        ifelse(pair_summary$status == "NO_DATA", "5_No_Data", "4_True_Mismatch")
-      )
-    )
-  )
-
-  detail_summary_df <- data.frame(
-    prefix = opt[["prefix"]],
-    group_y = opt[["group-y"]],
-    group_x = opt[["group-x"]],
-    unique_match_count = sum(pair_summary$match_type == "1_Unique_Match", na.rm = TRUE),
-    clonal_match_count = sum(pair_summary$match_type == "2_Clonal_Match", na.rm = TRUE),
-    swapped_mismatch_count = sum(pair_summary$match_type == "3_Swapped_Mismatch", na.rm = TRUE),
-    true_mismatch_count = sum(pair_summary$match_type == "4_True_Mismatch", na.rm = TRUE),
-    no_data_count = sum(pair_summary$match_type == "5_No_Data", na.rm = TRUE),
-    repeated_pair_count = sum(pair_summary$high_match_count > 1, na.rm = TRUE),
-    stringsAsFactors = FALSE
-  )
-  write.table(
-    detail_summary_df,
-    file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_match_type_summary.tsv")),
-    quote = FALSE,
-    sep = "\t",
-    row.names = FALSE
-  )
 
   rain_df <- build_raincloud_df(pair_summary, opt[["plot-mode"]], opt[["group-x"]], opt[["group-y"]])
 

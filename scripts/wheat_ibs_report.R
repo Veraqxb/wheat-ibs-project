@@ -478,7 +478,7 @@ draw_match_type_heatmap <- function(pair_summary, out_file, title) {
         category = factor(type_levels, levels = type_levels),
         fill_group = ifelse(type_levels == pair_summary$reference_class[i], type_levels, "inactive"),
         label = ifelse(
-          type_levels == pair_summary$primary_call[i],
+          type_levels == pair_summary$reference_class[i],
           paste0(
             pair_summary$best_x[i] %||% "",
             ifelse(is.na(pair_summary$ibs_best[i]), "", sprintf("\n%.3f", pair_summary$ibs_best[i])),

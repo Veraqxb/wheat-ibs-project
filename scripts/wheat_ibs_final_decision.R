@@ -32,6 +32,7 @@ opt[["tc-col"]] <- opt[["tc-col"]] %||% "TC"
 opt[["sc-col"]] <- opt[["sc-col"]] %||% "SC"
 opt[["fc-col"]] <- opt[["fc-col"]] %||% "FC"
 opt[["dna-ibs-matrix"]] <- opt[["dna-ibs-matrix"]] %||% ""
+opt[["neighbor-threshold"]] <- opt[["neighbor-threshold"]] %||% "0.99"
 
 dir.create(opt[["outdir"]], recursive = TRUE, showWarnings = FALSE)
 
@@ -72,6 +73,107 @@ coalesce_chr <- function(...) {
     out[fill] <- vals[[i]][fill]
   }
   out
+}
+
+split_ids <- function(x) {
+  if (length(x) == 0 || is.na(x) || !nzchar(x)) return(character(0))
+  trimws(unlist(strsplit(x, ";", fixed = TRUE)))
+}
+
+load_ibs_matrix <- function(path) {
+  if (!nzchar(path) || !file.exists(path)) return(NULL)
+  ibs_mat_df <- read.table(path, header = TRUE, sep = "\t", stringsAsFactors = FALSE, check.names = FALSE)
+  if (ncol(ibs_mat_df) <= 1) return(NULL)
+  row_ids <- ibs_mat_df[[1]]
+  ibs_mat <- as.matrix(ibs_mat_df[, -1, drop = FALSE])
+  mode(ibs_mat) <- "numeric"
+  rownames(ibs_mat) <- row_ids
+  colnames(ibs_mat) <- colnames(ibs_mat_df)[-1]
+  ibs_mat
+}
+
+build_similarity_clusters <- function(group_ids, ibs_mat, threshold, group_label) {
+  if (is.null(ibs_mat)) {
+    return(data.frame(
+      sample = character(0), group = character(0), cluster_id = character(0),
+      cluster_size = integer(0), cluster_members = character(0),
+      high_similarity_neighbor_ids = character(0), max_internal_ibs = numeric(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+  ids <- unique(group_ids[!is.na(group_ids) & group_ids %in% rownames(ibs_mat)])
+  if (length(ids) == 0) {
+    return(data.frame(
+      sample = character(0), group = character(0), cluster_id = character(0),
+      cluster_size = integer(0), cluster_members = character(0),
+      high_similarity_neighbor_ids = character(0), max_internal_ibs = numeric(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+  sub_mat <- ibs_mat[ids, ids, drop = FALSE]
+  adj <- setNames(vector("list", length(ids)), ids)
+  hi_idx <- which(upper.tri(sub_mat) & !is.na(sub_mat) & sub_mat >= threshold, arr.ind = TRUE)
+  if (nrow(hi_idx) > 0) {
+    for (k in seq_len(nrow(hi_idx))) {
+      a <- rownames(sub_mat)[hi_idx[k, 1]]
+      b <- colnames(sub_mat)[hi_idx[k, 2]]
+      adj[[a]] <- unique(c(adj[[a]], b))
+      adj[[b]] <- unique(c(adj[[b]], a))
+    }
+  }
+  visited <- setNames(rep(FALSE, length(ids)), ids)
+  cluster_map <- list()
+  cluster_index <- 0L
+  for (id in ids) {
+    if (visited[[id]]) next
+    cluster_index <- cluster_index + 1L
+    stack <- id
+    members <- character(0)
+    while (length(stack) > 0) {
+      cur <- stack[[1]]
+      stack <- stack[-1]
+      if (visited[[cur]]) next
+      visited[[cur]] <- TRUE
+      members <- c(members, cur)
+      nbrs <- adj[[cur]]
+      if (length(nbrs) > 0) {
+        stack <- c(stack, nbrs[!visited[nbrs]])
+      }
+    }
+    cluster_map[[sprintf("%s_cluster_%03d", group_label, cluster_index)]] <- sort(unique(members))
+  }
+  do.call(
+    rbind,
+    lapply(names(cluster_map), function(cid) {
+      members <- cluster_map[[cid]]
+      cluster_size <- length(members)
+      do.call(
+        rbind,
+        lapply(members, function(sample_id) {
+          neighbors <- setdiff(members, sample_id)
+          max_ibs <- if (cluster_size > 1) suppressWarnings(max(sub_mat[sample_id, neighbors], na.rm = TRUE)) else NA_real_
+          if (!is.finite(max_ibs)) max_ibs <- NA_real_
+          data.frame(
+            sample = sample_id,
+            group = group_label,
+            cluster_id = if (cluster_size > 1) cid else NA_character_,
+            cluster_size = cluster_size,
+            cluster_members = if (cluster_size > 1) paste(members, collapse = ";") else "",
+            high_similarity_neighbor_ids = if (cluster_size > 1) paste(neighbors, collapse = ";") else "",
+            max_internal_ibs = max_ibs,
+            stringsAsFactors = FALSE
+          )
+        })
+      )
+    })
+  )
+}
+
+collect_neighbor_hits <- function(neighbor_ids, candidates) {
+  neighbors <- split_ids(neighbor_ids)
+  candidates <- unique(candidates[!is.na(candidates) & candidates != ""])
+  hits <- intersect(candidates, neighbors)
+  if (length(hits) == 0) "" else paste(hits, collapse = ";")
 }
 
 map_df <- read.table(
@@ -379,6 +481,43 @@ base_df$rna_duplicate_ids <- apply(
   }
 )
 
+dna_ibs_mat <- load_ibs_matrix(opt[["dna-ibs-matrix"]])
+neighbor_threshold <- as.numeric(opt[["neighbor-threshold"]])
+z23_cluster_df <- build_similarity_clusters(base_df$expected_z23, dna_ibs_mat, neighbor_threshold, "Z23")
+b25_cluster_df <- build_similarity_clusters(base_df$expected_b25, dna_ibs_mat, neighbor_threshold, "B25")
+genotype_high_similarity_df <- rbind(
+  z23_cluster_df[z23_cluster_df$cluster_size > 1, , drop = FALSE],
+  b25_cluster_df[b25_cluster_df$cluster_size > 1, , drop = FALSE]
+)
+
+if (nrow(z23_cluster_df) > 0) {
+  z23_merge <- z23_cluster_df
+  names(z23_merge) <- c("expected_z23", "z23_group", "z23_cluster_id", "z23_cluster_size", "z23_cluster_members", "z23_high_similarity_neighbor_ids", "z23_cluster_max_ibs")
+  base_df <- merge(base_df, z23_merge, by = "expected_z23", all.x = TRUE, sort = FALSE)
+}
+if (nrow(b25_cluster_df) > 0) {
+  b25_merge <- b25_cluster_df
+  names(b25_merge) <- c("expected_b25", "b25_group", "b25_cluster_id", "b25_cluster_size", "b25_cluster_members", "b25_high_similarity_neighbor_ids", "b25_cluster_max_ibs")
+  base_df <- merge(base_df, b25_merge, by = "expected_b25", all.x = TRUE, sort = FALSE)
+}
+
+base_df$z23_neighbor_hit_ids <- ""
+base_df$b25_neighbor_hit_ids <- ""
+for (i in seq_len(nrow(base_df))) {
+  row_candidates <- c(
+    base_df$dna_best_match[i], base_df$dna_second_match[i], base_df$dna_third_match[i],
+    base_df$rna_best_match[i], base_df$rna_second_match[i], base_df$rna_third_match[i]
+  )
+  base_df$z23_neighbor_hit_ids[i] <- collect_neighbor_hits(base_df$z23_high_similarity_neighbor_ids[i], row_candidates)
+  base_df$b25_neighbor_hit_ids[i] <- collect_neighbor_hits(base_df$b25_high_similarity_neighbor_ids[i], row_candidates)
+}
+base_df$qc_nearby_class <- ifelse(
+  !is.na(base_df$z23_neighbor_hit_ids) & base_df$z23_neighbor_hit_ids != "", "Z23_cluster_support",
+  ifelse(!is.na(base_df$b25_neighbor_hit_ids) & base_df$b25_neighbor_hit_ids != "", "B25_cluster_support",
+    ifelse((is.na(base_df$z23_cluster_id) | base_df$z23_cluster_id == "") & (is.na(base_df$b25_cluster_id) | base_df$b25_cluster_id == ""), "No_cluster_data", "No_cluster_support")
+  )
+)
+
 base_df$final_decision <- ifelse(
   is.na(base_df$dna_status) | base_df$dna_status == "NO_DATA",
   ifelse(base_df$rna_status == "RESCUED_B25", "RESEQ", ifelse(base_df$rna_status == "PRIMARY_Z23", "REVIEW", "NO_DATA")),
@@ -420,10 +559,28 @@ base_df$comment <- ifelse(
   )
 )
 
+base_df$qc_rescue_call <- "NONE"
+z23_qc_idx <- base_df$final_decision %in% c("REMOVE", "NO_DATA") & base_df$qc_nearby_class == "Z23_cluster_support"
+base_df$final_decision[z23_qc_idx] <- "REVIEW"
+base_df$final_support_class[z23_qc_idx] <- "REVIEW_NEARBY_Z23"
+base_df$comment[z23_qc_idx] <- "high_similarity_z23_neighbor_support"
+base_df$qc_rescue_call[z23_qc_idx] <- "NEARBY_Z23_RESCUE"
+
+b25_qc_idx <- base_df$final_decision %in% c("REMOVE", "NO_DATA", "REVIEW") &
+  base_df$qc_nearby_class == "B25_cluster_support" &
+  base_df$rna_support_call == "B25_RESCUE"
+base_df$final_decision[b25_qc_idx] <- "RESEQ"
+base_df$final_support_class[b25_qc_idx] <- "KEEP_B25_NEARBY_RESCUE"
+base_df$comment[b25_qc_idx] <- "high_similarity_b25_neighbor_with_rna_support"
+base_df$qc_rescue_call[b25_qc_idx] <- "NEARBY_B25_RESCUE"
+
 final_cols <- c(
   "sample_id", "ploidy", "dataset", "expected_z23", "expected_b25", "expected_tc", "expected_sc", "expected_fc",
   "dna_best_match", "dna_ibs_expected", "dna_ibs_best", "dna_second_match", "dna_second_best", "dna_third_match", "dna_third_best", "dna_margin", "dna_high_match_count", "dna_high_match_ids", "dna_duplicate_ids", "dna_match_type", "dna_primary_call", "dna_duplicate_flag", "dna_status",
   "rna_source", "rna_best_match", "rna_second_match", "rna_third_match", "rna_ibs_expected", "rna_margin", "rna_high_match_ids", "rna_duplicate_ids", "rna_status", "rna_support_call",
+  "z23_cluster_id", "z23_cluster_size", "z23_high_similarity_neighbor_ids", "z23_neighbor_hit_ids",
+  "b25_cluster_id", "b25_cluster_size", "b25_high_similarity_neighbor_ids", "b25_neighbor_hit_ids",
+  "qc_nearby_class", "qc_rescue_call",
   "final_support_class", "final_decision", "action", "comment"
 )
 final_df <- base_df[, final_cols, drop = FALSE]
@@ -446,8 +603,10 @@ summary_df <- data.frame(
   final_retained_count = sum(final_df$final_decision %in% c("KEEP", "RESEQ")),
   keep_z23_count = sum(final_df$final_support_class == "KEEP_Z23", na.rm = TRUE),
   keep_b25_rescue_count = sum(final_df$final_support_class == "KEEP_B25_RESCUE", na.rm = TRUE),
+  keep_b25_nearby_rescue_count = sum(final_df$final_support_class == "KEEP_B25_NEARBY_RESCUE", na.rm = TRUE),
   review_swap_count = sum(final_df$final_support_class == "REVIEW_SWAP", na.rm = TRUE),
   review_conflict_count = sum(final_df$final_support_class == "REVIEW_CONFLICT", na.rm = TRUE),
+  review_nearby_z23_count = sum(final_df$final_support_class == "REVIEW_NEARBY_Z23", na.rm = TRUE),
   stringsAsFactors = FALSE
 )
 write.table(summary_df, file = file.path(outdir, paste0(prefix, "_final_summary.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
@@ -464,6 +623,8 @@ dna_summary_df <- data.frame(
   z23_unmatched_count = sum(final_df$dna_primary_call == "Z23_UNMATCHED", na.rm = TRUE),
   no_data_primary_count = sum(final_df$dna_primary_call == "NO_DATA", na.rm = TRUE),
   dna_duplicate_pair_count = sum(!is.na(final_df$dna_duplicate_ids) & final_df$dna_duplicate_ids != "", na.rm = TRUE),
+  z23_cluster_support_count = sum(final_df$qc_nearby_class == "Z23_cluster_support", na.rm = TRUE),
+  b25_cluster_support_count = sum(final_df$qc_nearby_class == "B25_cluster_support", na.rm = TRUE),
   stringsAsFactors = FALSE
 )
 write.table(dna_summary_df, file = file.path(outdir, paste0(prefix, "_dna_summary.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
@@ -476,6 +637,8 @@ rna_summary_df <- data.frame(
   rna_unmatched_drop_count = sum(final_df$rna_status == "UNMATCHED_DROP", na.rm = TRUE),
   rna_no_data_count = sum(final_df$rna_status == "NO_DATA" | is.na(final_df$rna_status), na.rm = TRUE),
   rna_duplicate_pair_count = sum(!is.na(final_df$rna_duplicate_ids) & final_df$rna_duplicate_ids != "", na.rm = TRUE),
+  z23_neighbor_rescue_count = sum(final_df$qc_rescue_call == "NEARBY_Z23_RESCUE", na.rm = TRUE),
+  b25_neighbor_rescue_count = sum(final_df$qc_rescue_call == "NEARBY_B25_RESCUE", na.rm = TRUE),
   stringsAsFactors = FALSE
 )
 write.table(rna_summary_df, file = file.path(outdir, paste0(prefix, "_rna_summary.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
@@ -502,10 +665,24 @@ rna_source_summary_df <- do.call(
 write.table(rna_audit_long, file = file.path(outdir, paste0(prefix, "_rna_source_audit.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
 write.table(rna_source_summary_df, file = file.path(outdir, paste0(prefix, "_rna_source_summary.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
 write.table(rna_audit_long[rna_audit_long$complete_mismatch == "YES", , drop = FALSE], file = file.path(outdir, paste0(prefix, "_rna_complete_mismatch.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+write.table(genotype_high_similarity_df, file = file.path(outdir, paste0(prefix, "_genotype_high_similarity.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+write.table(final_df[final_df$qc_rescue_call != "NONE", , drop = FALSE], file = file.path(outdir, paste0(prefix, "_qc_neighbor_rescue.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
 
 write.table(final_df[final_df$final_decision == "REMOVE", , drop = FALSE], file = file.path(outdir, paste0(prefix, "_remove_candidates.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
 write.table(final_df[final_df$final_decision == "RESEQ", , drop = FALSE], file = file.path(outdir, paste0(prefix, "_reseq_candidates.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
 write.table(final_df[final_df$final_decision == "REVIEW", , drop = FALSE], file = file.path(outdir, paste0(prefix, "_review_candidates.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+
+for (src in unique(rna_audit_long$source)) {
+  src_df <- rna_audit_long[rna_audit_long$source == src, , drop = FALSE]
+  src_df <- merge(
+    src_df,
+    final_df[, c("sample_id", "final_decision", "final_support_class", "qc_nearby_class", "qc_rescue_call")],
+    by = "sample_id",
+    all.x = TRUE,
+    sort = FALSE
+  )
+  write.table(src_df, file = file.path(outdir, paste0(prefix, "_", src, "_judgement.tsv")), quote = FALSE, sep = "\t", row.names = FALSE)
+}
 
 write_html_table <- function(df, summary_df, file) {
   row_color <- function(x) {
@@ -786,13 +963,9 @@ if (nrow(margin_df) > 0) {
 }
 
 if (nzchar(opt[["dna-ibs-matrix"]]) && file.exists(opt[["dna-ibs-matrix"]])) {
-  ibs_mat_df <- read.table(opt[["dna-ibs-matrix"]], header = TRUE, sep = "\t", stringsAsFactors = FALSE, check.names = FALSE)
-  if (ncol(ibs_mat_df) > 1) {
-    row_ids <- ibs_mat_df[[1]]
-    ibs_mat <- as.matrix(ibs_mat_df[, -1, drop = FALSE])
-    mode(ibs_mat) <- "numeric"
-    rownames(ibs_mat) <- row_ids
-    colnames(ibs_mat) <- colnames(ibs_mat_df)[-1]
+  if (!is.null(dna_ibs_mat)) {
+    row_ids <- rownames(dna_ibs_mat)
+    ibs_mat <- dna_ibs_mat
     common_ids <- intersect(final_df$expected_b25, row_ids)
     if (length(common_ids) >= 3) {
       dist_mat <- 1 - ibs_mat[common_ids, common_ids, drop = FALSE]
@@ -825,6 +998,12 @@ if (nzchar(opt[["dna-ibs-matrix"]]) && file.exists(opt[["dna-ibs-matrix"]])) {
           draw_issue_heatmap(issue_mat, file.path(outdir, paste0(prefix, "_issue_heatmap.pdf")), paste(prefix, "Issue Samples"))
         }
       }
+    }
+    high_sim_ids <- unique(genotype_high_similarity_df$sample[genotype_high_similarity_df$cluster_size > 1])
+    high_sim_ids <- high_sim_ids[high_sim_ids %in% row_ids]
+    if (length(high_sim_ids) >= 2) {
+      hi_mat <- ibs_mat[high_sim_ids, high_sim_ids, drop = FALSE]
+      draw_issue_heatmap(hi_mat, file.path(outdir, paste0(prefix, "_genotype_high_similarity_heatmap.pdf")), paste(prefix, "High-similarity genotype clusters"))
     }
   }
 }

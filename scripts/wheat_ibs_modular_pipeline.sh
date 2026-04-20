@@ -31,15 +31,23 @@ Optional:
 EOF
 }
 
+require_var() {
+  local var_name="$1"
+  if [[ -z "${!var_name:-}" ]]; then
+    echo "Missing required config variable: ${var_name}" >&2
+    exit 1
+  fi
+}
+
 [[ $# -eq 1 ]] || { usage; exit 1; }
 CONFIG_FILE="$1"
 [[ -f "$CONFIG_FILE" ]] || { echo "Config file not found: $CONFIG_FILE" >&2; exit 1; }
 source "$CONFIG_FILE"
 
-: "${MODE:?missing MODE}"
-: "${WORK_ROOT:?missing WORK_ROOT}"
-: "${PREFIX:?missing PREFIX}"
-: "${MAP_FILE:?missing MAP_FILE}"
+require_var MODE
+require_var WORK_ROOT
+require_var PREFIX
+require_var MAP_FILE
 
 RSCRIPT_BIN="${RSCRIPT_BIN:-Rscript}"
 ANCHOR_COL="${ANCHOR_COL:-}"
@@ -60,12 +68,19 @@ STEP05_DIR="${WORK_ROOT}/step05_cluster_rescue_and_summary"
 mkdir -p "$STEP01_DIR" "$STEP02_DIR" "$STEP03_DIR" "$STEP04_DIR" "$STEP05_DIR"
 
 if [[ "$MODE" == "vcf" ]]; then
+  require_var PROJECT_ROOT
+  require_var VCF_SOURCE_DIR
+  require_var BCFTOOLS_BIN
+  require_var BGZIP_BIN
+  require_var TABIX_BIN
+  require_var PLINK_BIN
+  require_var PARALLEL_BIN
   bash "${SCRIPT_DIR}/step00_vcf_to_ibs.sh" "$CONFIG_FILE"
   IBS_FILE="${WORK_ROOT}/step00_vcf_to_ibs/04_plink/${PREFIX}.final_qc.mibs"
   IBS_ID_FILE="${WORK_ROOT}/step00_vcf_to_ibs/04_plink/${PREFIX}.final_qc.mibs.id"
 elif [[ "$MODE" == "ibs" ]]; then
-  : "${IBS_FILE:?missing IBS_FILE for MODE=ibs}"
-  : "${IBS_ID_FILE:?missing IBS_ID_FILE for MODE=ibs}"
+  require_var IBS_FILE
+  require_var IBS_ID_FILE
 else
   echo "Unsupported MODE: ${MODE}" >&2
   exit 1

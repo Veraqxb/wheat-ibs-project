@@ -48,9 +48,22 @@ Core design:
 - RNA groups use Z23-first matching and B25 as rescue
 - Low-IBS / swapped samples are checked against anchor high-similarity clusters
 
-Example config:
+Example configs:
 
-- `configs/wheat_ibs_modular_example.config.sh`
+- `configs/wheat_ibs_modular_ibs_example.config.sh`
+  Directly read existing `.mibs/.mibs.id` and run the full matching workflow
+- `configs/wheat_ibs_modular_vcf_example.config.sh`
+  Start from chromosome-level VCF files, compute IBS, then run the full matching workflow
+
+Recommended usage:
+
+```bash
+bash scripts/wheat_ibs_modular_pipeline.sh configs/wheat_ibs_modular_ibs_example.config.sh
+```
+
+```bash
+bash scripts/wheat_ibs_modular_pipeline.sh configs/wheat_ibs_modular_vcf_example.config.sh
+```
 
 ## Current Project Scope
 

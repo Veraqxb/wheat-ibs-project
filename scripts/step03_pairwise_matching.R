@@ -127,7 +127,13 @@ for (group_name in names(map_df)[-1]) {
     threshold = group_threshold
   )
 
-  group_summary <- as.data.frame(table(group_name = group_name, match_type = factor(pair_df$match_type, levels = c("MATCH", "SWAPPED", "LOW_IBS", "NO_DATA"))), stringsAsFactors = FALSE)
+  group_summary <- as.data.frame(
+    table(
+      group_name = rep(group_name, nrow(pair_df)),
+      match_type = factor(pair_df$match_type, levels = c("MATCH", "SWAPPED", "LOW_IBS", "NO_DATA"))
+    ),
+    stringsAsFactors = FALSE
+  )
   names(group_summary)[3] <- "count"
   group_summary$threshold <- group_threshold
   summary_list[[group_name]] <- group_summary

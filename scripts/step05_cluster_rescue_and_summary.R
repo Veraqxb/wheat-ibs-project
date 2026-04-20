@@ -164,7 +164,13 @@ for (group_name in names(map_df)[-1]) {
   group_df <- do.call(rbind, group_rows)
   write.table(group_df, file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_", group_name, "_matching_simple.tsv")), sep = "\t", quote = FALSE, row.names = FALSE)
   simple_rows[[group_name]] <- group_df
-  summary_rows[[group_name]] <- as.data.frame(table(group_name = group_name, match_type = group_df$match_type), stringsAsFactors = FALSE)
+  summary_rows[[group_name]] <- as.data.frame(
+    table(
+      group_name = rep(group_name, nrow(group_df)),
+      match_type = group_df$match_type
+    ),
+    stringsAsFactors = FALSE
+  )
 }
 
 full_simple <- do.call(rbind, simple_rows)

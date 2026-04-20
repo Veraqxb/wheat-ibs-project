@@ -30,6 +30,7 @@ The repository now includes a modular IBS matching workflow with two entry modes
 Main entry:
 
 - `scripts/wheat_ibs_modular_pipeline.sh`
+- `scripts/plot_group_heatmaps.R`
 
 Steps:
 
@@ -78,6 +79,22 @@ To write the three same-ploidy config files directly on the server so they stay 
 
 ```bash
 bash scripts/write_server_modular_configs.sh
+```
+
+Standalone heatmap export from existing IBS files:
+
+```bash
+Rscript scripts/plot_group_heatmaps.R \
+  --reference-mibs /path/to/2group.mibs \
+  --reference-id /path/to/2group.mibs.id \
+  --query-mibs /path/to/5group.mibs \
+  --query-id /path/to/5group.mibs.id \
+  --map /path/to/id_map.txt \
+  --outdir /path/to/heatmaps \
+  --prefix C2_heatmaps \
+  --anchor-col Z23 \
+  --secondary-col B25 \
+  --rna-groups "TC FC SC"
 ```
 
 ## Current Project Scope

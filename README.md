@@ -44,6 +44,7 @@ Core design:
 
 - The first column of the sample map is used as the anchor reference group
 - Anchor-group clusters are defined by `IBS > 0.99`
+- The same-ploidy `2group` dataset can be used as the reference cluster library for the downstream `5group` dataset
 - Every downstream group is matched against the anchor in map order
 - Sample names are matched by exact string equality only; no fuzzy ID rescue is used when reading the map against `.mibs.id`
 - RNA groups use Z23-first matching and B25 as rescue
@@ -56,6 +57,19 @@ Example configs:
 - `configs/wheat_ibs_modular_vcf_example.config.sh`
   Start from chromosome-level VCF files, compute IBS, then run the full matching workflow
 
+Integrated same-ploidy configs:
+
+- `configs/C2_modular.config.sh`
+- `configs/C4_modular.config.sh`
+- `configs/C6_modular.config.sh`
+
+These configs contain both:
+
+- `2group` reference inputs for duplicate-cluster library building
+- `5group` query inputs for downstream sample identification
+
+So in practice you only need to run three config files, one per ploidy.
+
 Recommended usage:
 
 ```bash
@@ -64,6 +78,14 @@ bash scripts/wheat_ibs_modular_pipeline.sh configs/wheat_ibs_modular_ibs_example
 
 ```bash
 bash scripts/wheat_ibs_modular_pipeline.sh configs/wheat_ibs_modular_vcf_example.config.sh
+```
+
+For the integrated same-ploidy workflow:
+
+```bash
+bash scripts/wheat_ibs_modular_pipeline.sh configs/C2_modular.config.sh
+bash scripts/wheat_ibs_modular_pipeline.sh configs/C4_modular.config.sh
+bash scripts/wheat_ibs_modular_pipeline.sh configs/C6_modular.config.sh
 ```
 
 ## Current Project Scope

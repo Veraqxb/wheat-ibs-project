@@ -88,6 +88,12 @@ bash scripts/wheat_ibs_modular_pipeline.sh configs/C4_modular.config.sh
 bash scripts/wheat_ibs_modular_pipeline.sh configs/C6_modular.config.sh
 ```
 
+To write the three same-ploidy config files directly on the server so they stay identical to the repository templates:
+
+```bash
+bash scripts/write_server_modular_configs.sh
+```
+
 ## Current Project Scope
 
 The project focuses on:

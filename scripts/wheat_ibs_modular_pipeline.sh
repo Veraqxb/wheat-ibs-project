@@ -34,6 +34,7 @@ Optional:
   ANCHOR_COL         default first map column
   SECONDARY_COL      default B25
   RNA_GROUPS         default "TC SC FC"
+  DETECTION_MODE     default full; use simple to scan later groups only against the first-column cluster reference
   DNA_THRESHOLD      default 0.99
   RNA_THRESHOLD      default 0.90
   IBS_ZMIN           default 0.7
@@ -63,6 +64,7 @@ RSCRIPT_BIN="${RSCRIPT_BIN:-Rscript}"
 ANCHOR_COL="${ANCHOR_COL:-}"
 SECONDARY_COL="${SECONDARY_COL:-B25}"
 RNA_GROUPS="${RNA_GROUPS:-TC SC FC}"
+DETECTION_MODE="${DETECTION_MODE:-full}"
 DNA_THRESHOLD="${DNA_THRESHOLD:-0.99}"
 RNA_THRESHOLD="${RNA_THRESHOLD:-0.90}"
 IBS_ZMIN="${IBS_ZMIN:-0.7}"
@@ -169,6 +171,7 @@ if [[ "$PAIRED_MODE" == true ]]; then
     --outdir "$STEP02_DIR" \
     --prefix "$REFERENCE_PREFIX" \
     --anchor-col "$ANCHOR_COL" \
+    --secondary-col "$SECONDARY_COL" \
     --zmin "$IBS_ZMIN" \
     --zmax "$IBS_ZMAX"
 
@@ -210,6 +213,7 @@ if [[ "$PAIRED_MODE" == true ]]; then
     --prefix "$PREFIX" \
     --anchor-col "$ANCHOR_COL" \
     --secondary-col "$SECONDARY_COL" \
+    --detection-mode "$DETECTION_MODE" \
     --rna-groups "$RNA_GROUPS" \
     --dna-threshold "$DNA_THRESHOLD" \
     --rna-threshold "$RNA_THRESHOLD"
@@ -227,6 +231,7 @@ else
     --outdir "${WORK_ROOT}/step02_build_reference_cluster" \
     --prefix "$PREFIX" \
     --anchor-col "$ANCHOR_COL" \
+    --secondary-col "$SECONDARY_COL" \
     --zmin "$IBS_ZMIN" \
     --zmax "$IBS_ZMAX"
 
@@ -261,6 +266,7 @@ else
     --prefix "$PREFIX" \
     --anchor-col "$ANCHOR_COL" \
     --secondary-col "$SECONDARY_COL" \
+    --detection-mode "$DETECTION_MODE" \
     --rna-groups "$RNA_GROUPS" \
     --dna-threshold "$DNA_THRESHOLD" \
     --rna-threshold "$RNA_THRESHOLD"

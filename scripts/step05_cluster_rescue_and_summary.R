@@ -12,6 +12,7 @@ opt[["secondary-col"]] <- opt[["secondary-col"]] %||% "B25"
 opt[["rna-groups"]] <- opt[["rna-groups"]] %||% "TC SC FC"
 opt[["dna-threshold"]] <- opt[["dna-threshold"]] %||% "0.99"
 opt[["rna-threshold"]] <- opt[["rna-threshold"]] %||% "0.90"
+opt[["detection-mode"]] <- opt[["detection-mode"]] %||% "full"
 
 dir.create(opt[["outdir"]], recursive = TRUE, showWarnings = FALSE)
 map_df <- read_sample_map(opt[["map"]])
@@ -27,6 +28,7 @@ colnames(ibs_mat) <- colnames(mat_df)[-1]
 
 cluster_df <- read.table(opt[["cluster-table"]], header = TRUE, sep = "\t", stringsAsFactors = FALSE, check.names = FALSE)
 if (!("sample_id" %in% names(cluster_df))) stop("Cluster table missing sample_id column")
+if (!("reference_group" %in% names(cluster_df))) cluster_df$reference_group <- anchor_col
 
 pair_files <- list.files(opt[["pairwise-dir"]], pattern = "_pairwise\\.tsv$", full.names = TRUE)
 pair_tables <- lapply(pair_files, function(x) read.table(x, header = TRUE, sep = "\t", stringsAsFactors = FALSE, check.names = FALSE))
@@ -36,9 +38,9 @@ if (!(secondary_col %in% names(pair_tables))) {
   warning("Secondary reference group pairwise table not found for ", secondary_col, "; RNA rescue will use direct IBS lookup only.")
 }
 
-cluster_lookup <- split(cluster_df, cluster_df$sample_id)
-cluster_members_for <- function(anchor_id) {
-  hit <- cluster_lookup[[anchor_id]]
+cluster_lookup <- split(cluster_df, paste(cluster_df$reference_group, cluster_df$sample_id, sep = "||"))
+cluster_members_for <- function(reference_group, sample_id) {
+  hit <- cluster_lookup[[paste(reference_group, sample_id, sep = "||")]]
   if (is.null(hit) || nrow(hit) == 0) return(character(0))
   members <- unique(unlist(strsplit(hit$cluster_members[1], ";", fixed = TRUE)))
   members[nzchar(members)]
@@ -98,15 +100,17 @@ for (group_name in names(map_df)[-1]) {
         match_info <- paste("Matched expected", anchor_col)
         matched_id <- row$anchor_id
         final_ibs <- row$pair_ibs
-      } else if (identical(secondary_res$match_type, "MATCH")) {
+      } else if (opt[["detection-mode"]] != "simple" && identical(secondary_res$match_type, "MATCH")) {
         match_type <- "RESCUED_B25"
         match_info <- paste("Unmatched to", anchor_col, "but rescued by", secondary_col, secondary_res$best_match)
         matched_id <- secondary_res$best_match
         final_ibs <- secondary_res$best_ibs
       } else {
-        cluster_members <- cluster_members_for(row$anchor_id)
-        neighbor_candidates <- c(row$best_anchor, secondary_res$best_match)
+        cluster_members <- cluster_members_for(anchor_col, row$anchor_id)
+        secondary_cluster_members <- if (opt[["detection-mode"]] != "simple" && !is.na(secondary_expected)) cluster_members_for(secondary_col, secondary_expected) else character(0)
+        neighbor_candidates <- c(row$best_anchor, if (opt[["detection-mode"]] != "simple") secondary_res$best_match else NA_character_)
         rescue_hit <- intersect(cluster_members, neighbor_candidates)
+        secondary_rescue_hit <- intersect(secondary_cluster_members, neighbor_candidates)
         if (length(rescue_hit) > 0) {
           match_type <- "RESCUED_CLUSTER"
           match_info <- paste("Rescued by anchor-cluster neighbor", rescue_hit[1])
@@ -115,6 +119,15 @@ for (group_name in names(map_df)[-1]) {
             final_ibs <- row$best_anchor_ibs
           } else if (!is.na(secondary_res$best_ibs) && secondary_res$best_match == rescue_hit[1]) {
             final_ibs <- secondary_res$best_ibs
+          }
+        } else if (length(secondary_rescue_hit) > 0) {
+          match_type <- "RESCUED_CLUSTER"
+          match_info <- paste("Rescued by", secondary_col, "cluster neighbor", secondary_rescue_hit[1])
+          matched_id <- secondary_rescue_hit[1]
+          if (!is.na(secondary_res$best_ibs) && secondary_res$best_match == secondary_rescue_hit[1]) {
+            final_ibs <- secondary_res$best_ibs
+          } else if (!is.na(row$best_anchor_ibs) && row$best_anchor == secondary_rescue_hit[1]) {
+            final_ibs <- row$best_anchor_ibs
           }
         } else if (identical(match_type, "SWAPPED")) {
           match_type <- "SWAPPED"

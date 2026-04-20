@@ -187,10 +187,9 @@ build_similarity_clusters <- function(sample_ids, ibs_mat, threshold = 0.99) {
 draw_heatmap <- function(sub_mat, file, title, zlim = c(0.7, 1.0), show_values = TRUE) {
   if (is.null(sub_mat) || nrow(sub_mat) == 0 || ncol(sub_mat) == 0) return(invisible(NULL))
 
-  cols <- colorRampPalette(rev(c(
-    "#A50026", "#D73027", "#F46D43", "#FDAE61", "#FEE090",
-    "#FFFFBF", "#E0F3F8", "#ABD9E9", "#74ADD1", "#4575B4", "#313695"
-  )))(100)
+  cols <- colorRampPalette(c(
+    "#440154", "#414487", "#2A788E", "#22A884", "#7AD151", "#FDE725"
+  ))(100)
 
   nx <- ncol(sub_mat)
   ny <- nrow(sub_mat)
@@ -231,7 +230,7 @@ draw_density_plot <- function(internal_vals, pair_vals, out_file, title, interna
 
   if (requireNamespace("ggplot2", quietly = TRUE)) {
     library(ggplot2)
-    cols <- c("#4575b4", "#d73027")
+    cols <- c("#0072B2", "#D55E00")
     names(cols) <- levels(df$Category)
     pdf(out_file, width = 8.5, height = 5.5)
     print(
@@ -263,10 +262,23 @@ draw_density_plot <- function(internal_vals, pair_vals, out_file, title, interna
 draw_category_barplot <- function(summary_df, out_file, title, group_col = "group_name", category_col = "match_type", count_col = "count") {
   if (!requireNamespace("ggplot2", quietly = TRUE) || nrow(summary_df) == 0) return(invisible(NULL))
   library(ggplot2)
+  category_values <- unique(as.character(summary_df[[category_col]]))
+  cb_palette <- c(
+    "MATCH" = "#009E73",
+    "MATCH_Z23" = "#009E73",
+    "RESCUED_B25" = "#E69F00",
+    "RESCUED_CLUSTER" = "#56B4E9",
+    "SWAPPED" = "#D55E00",
+    "LOW_IBS" = "#CC79A7",
+    "DROP" = "#999999",
+    "NO_DATA" = "#000000"
+  )
+  fill_scale <- cb_palette[intersect(names(cb_palette), category_values)]
   pdf(out_file, width = 9, height = 5.5)
   print(
     ggplot(summary_df, aes_string(x = group_col, y = count_col, fill = category_col)) +
       geom_col(position = "stack") +
+      scale_fill_manual(values = fill_scale, drop = FALSE) +
       theme_bw(base_size = 12) +
       labs(title = title, x = "Group", y = "Sample count") +
       theme(plot.title = element_text(face = "bold", hjust = 0.5), axis.text.x = element_text(angle = 30, hjust = 1))

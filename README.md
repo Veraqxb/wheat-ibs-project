@@ -45,10 +45,12 @@ Core design:
 - The first column of the sample map is used as the anchor reference group
 - Anchor-group clusters are defined by `IBS > 0.99`
 - The same-ploidy `2group` dataset can be used as the reference cluster library for the downstream `5group` dataset
+- In `2group` reference mode, both `Z23` and `B25` clusters are built, their row-wise overlap is exported, and the combined cluster table is used for downstream rescue
 - Every downstream group is matched against the anchor in map order
 - Sample names are matched by exact string equality only; no fuzzy ID rescue is used when reading the map against `.mibs.id`
 - RNA groups use Z23-first matching and B25 as rescue
 - Low-IBS / swapped samples are checked against anchor high-similarity clusters
+- `DETECTION_MODE=simple` can be used to disable B25 direct rescue and scan later groups only against the first-column cluster reference
 
 Formal same-ploidy configs:
 

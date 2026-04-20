@@ -18,6 +18,40 @@ This folder keeps a local record of the wheat IBS identification project, includ
 - `configs/`
   Config template snapshot.
 
+## New Modular Pipeline
+
+The repository now includes a modular IBS matching workflow with two entry modes:
+
+- `MODE=vcf`
+  Read chromosome-level VCF files, filter, compute PLINK IBS, and export `.mibs/.mibs.id`
+- `MODE=ibs`
+  Reuse existing `.mibs/.mibs.id` and run downstream matching directly
+
+Main entry:
+
+- `scripts/wheat_ibs_modular_pipeline.sh`
+
+Steps:
+
+- `scripts/step00_vcf_to_ibs.sh`
+- `scripts/step01_prepare_matrix.R`
+- `scripts/step02_build_reference_cluster.R`
+- `scripts/step03_pairwise_matching.R`
+- `scripts/step04_diagnose_low_ibs.R`
+- `scripts/step05_cluster_rescue_and_summary.R`
+
+Core design:
+
+- The first column of the sample map is used as the anchor reference group
+- Anchor-group clusters are defined by `IBS > 0.99`
+- Every downstream group is matched against the anchor in map order
+- RNA groups use Z23-first matching and B25 as rescue
+- Low-IBS / swapped samples are checked against anchor high-similarity clusters
+
+Example config:
+
+- `configs/wheat_ibs_modular_example.config.sh`
+
 ## Current Project Scope
 
 The project focuses on:
@@ -39,4 +73,3 @@ The project focuses on:
 - Use exon / RNA-based VCF as supporting evidence
 - Use `best match + second best + margin` rather than a single IBS value
 - Use `Z23` as the first identity baseline for transcriptome sample decisions
-

@@ -37,7 +37,7 @@ for (group_name in names(map_df)[-1]) {
   sample_idx <- seq_len(nrow(map_df))
   pair_df <- data.frame(
     row_index = sample_idx,
-    sample_number = extract_sample_number(group_ids_all),
+    sample_id = group_ids_all,
     group_name = group_name,
     anchor_id = anchor_ids_all,
     query_id = group_ids_all,

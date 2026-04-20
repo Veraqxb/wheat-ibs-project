@@ -83,7 +83,7 @@ for (group_name in names(map_df)[-1]) {
 
   for (i in seq_len(nrow(pair_df))) {
     row <- pair_df[i, , drop = FALSE]
-    sample_id <- if ("sample_number" %in% names(row)) row$sample_number else extract_sample_number(row$query_id)
+    sample_id <- if ("sample_id" %in% names(row)) row$sample_id else row$query_id
     match_type <- row$match_type
     match_info <- row$match_info
     final_ibs <- row$pair_ibs

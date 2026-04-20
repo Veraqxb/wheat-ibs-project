@@ -50,14 +50,7 @@ Core design:
 - RNA groups use Z23-first matching and B25 as rescue
 - Low-IBS / swapped samples are checked against anchor high-similarity clusters
 
-Example configs:
-
-- `configs/wheat_ibs_modular_ibs_example.config.sh`
-  Directly read existing `.mibs/.mibs.id` and run the full matching workflow
-- `configs/wheat_ibs_modular_vcf_example.config.sh`
-  Start from chromosome-level VCF files, compute IBS, then run the full matching workflow
-
-Integrated same-ploidy configs:
+Formal same-ploidy configs:
 
 - `configs/C2_modular.config.sh`
 - `configs/C4_modular.config.sh`
@@ -71,16 +64,6 @@ These configs contain both:
 So in practice you only need to run three config files, one per ploidy.
 
 Recommended usage:
-
-```bash
-bash scripts/wheat_ibs_modular_pipeline.sh configs/wheat_ibs_modular_ibs_example.config.sh
-```
-
-```bash
-bash scripts/wheat_ibs_modular_pipeline.sh configs/wheat_ibs_modular_vcf_example.config.sh
-```
-
-For the integrated same-ploidy workflow:
 
 ```bash
 bash scripts/wheat_ibs_modular_pipeline.sh configs/C2_modular.config.sh

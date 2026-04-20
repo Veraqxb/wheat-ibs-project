@@ -217,7 +217,7 @@ draw_heatmap <- function(sub_mat, file, title, zlim = c(0.7, 1.0), show_values =
   dev.off()
 }
 
-draw_density_plot <- function(internal_vals, pair_vals, out_file, title, internal_label, pair_label, threshold) {
+draw_density_plot <- function(internal_vals, pair_vals, out_file, title, internal_label, pair_label, threshold, threshold_lines = c(0.99, 0.90)) {
   internal_vals <- internal_vals[!is.na(internal_vals)]
   pair_vals <- pair_vals[!is.na(pair_vals)]
   if (length(internal_vals) + length(pair_vals) == 0) return(invisible(NULL))
@@ -237,7 +237,7 @@ draw_density_plot <- function(internal_vals, pair_vals, out_file, title, interna
     print(
       ggplot(df, aes(x = IBS, color = Category, fill = Category)) +
         geom_density(alpha = 0.18, linewidth = 1.15, adjust = 1.1) +
-        geom_vline(xintercept = threshold, linetype = "dashed", color = "grey35", linewidth = 0.7) +
+        geom_vline(xintercept = threshold_lines, linetype = "dashed", color = c("#4D4D4D", "#7F7F7F"), linewidth = 0.7) +
         scale_color_manual(values = cols) +
         scale_fill_manual(values = cols) +
         labs(title = title, x = "IBS", y = "Density") +
@@ -254,8 +254,49 @@ draw_density_plot <- function(internal_vals, pair_vals, out_file, title, interna
     if (length(pair_vals) >= 2 && diff(range(pair_vals)) > 0) {
       lines(density(pair_vals), col = "#d73027", lwd = 2)
     }
-    abline(v = threshold, lty = 2, col = "grey40")
+    abline(v = threshold_lines, lty = 2, col = c("grey40", "grey60"))
     legend("topright", legend = c(internal_label, pair_label), col = c("#4575b4", "#d73027"), lwd = 2, bty = "n")
+    dev.off()
+  }
+}
+
+draw_group_density_collection <- function(collection_df, out_file, title, threshold_lines = c(0.99, 0.90)) {
+  if (is.null(collection_df) || nrow(collection_df) == 0) return(invisible(NULL))
+  collection_df <- collection_df[!is.na(collection_df$IBS), , drop = FALSE]
+  if (nrow(collection_df) == 0) return(invisible(NULL))
+
+  if (requireNamespace("ggplot2", quietly = TRUE)) {
+    library(ggplot2)
+    cols <- c("internal" = "#0072B2", "paired_1to1" = "#D55E00")
+    pdf(out_file, width = 10, height = max(5.5, 2 + 1.4 * length(unique(collection_df$group_name))))
+    print(
+      ggplot(collection_df, aes(x = IBS, color = Category, fill = Category)) +
+        geom_density(alpha = 0.18, linewidth = 1.0, adjust = 1.1) +
+        geom_vline(xintercept = threshold_lines, linetype = "dashed", color = c("#4D4D4D", "#7F7F7F"), linewidth = 0.6) +
+        facet_wrap(~group_name, ncol = 1, scales = "free_y") +
+        scale_color_manual(values = cols) +
+        scale_fill_manual(values = cols) +
+        labs(title = title, x = "IBS", y = "Density") +
+        theme_bw(base_size = 12) +
+        theme(plot.title = element_text(face = "bold", hjust = 0.5), panel.grid.minor = element_blank())
+    )
+    dev.off()
+  } else {
+    groups <- unique(collection_df$group_name)
+    pdf(out_file, width = 10, height = max(5.5, 2 + 1.6 * length(groups)))
+    old_par <- par(no.readonly = TRUE)
+    on.exit(par(old_par), add = TRUE)
+    par(mfrow = c(length(groups), 1), mar = c(4, 4, 2, 1))
+    for (g in groups) {
+      sub_df <- collection_df[collection_df$group_name == g, , drop = FALSE]
+      plot(NA, xlim = range(sub_df$IBS, na.rm = TRUE), ylim = c(0, 1), xlab = "IBS", ylab = "Density", main = g)
+      internal_vals <- sub_df$IBS[sub_df$Category == "internal"]
+      pair_vals <- sub_df$IBS[sub_df$Category == "paired_1to1"]
+      if (length(internal_vals) >= 2 && diff(range(internal_vals)) > 0) lines(density(internal_vals), col = "#4575b4", lwd = 2)
+      if (length(pair_vals) >= 2 && diff(range(pair_vals)) > 0) lines(density(pair_vals), col = "#d73027", lwd = 2)
+      abline(v = threshold_lines, lty = 2, col = c("grey40", "grey60"))
+      legend("topright", legend = c("internal", "paired_1to1"), col = c("#4575b4", "#d73027"), lwd = 2, bty = "n")
+    }
     dev.off()
   }
 }

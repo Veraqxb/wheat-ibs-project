@@ -32,6 +32,7 @@ if (length(anchor_ids) == 0) stop("No anchor-group samples matched IBS matrix fo
 summary_list <- list()
 all_low <- list()
 log_lines <- character(0)
+collection_rows <- list()
 
 for (group_name in names(map_df)[-1]) {
   group_ids_all <- standardize_id(map_df[[group_name]])
@@ -138,6 +139,11 @@ for (group_name in names(map_df)[-1]) {
     threshold = group_threshold
   )
 
+  collection_rows[[group_name]] <- rbind(
+    data.frame(group_name = group_name, Category = "internal", IBS = internal_vals, stringsAsFactors = FALSE),
+    data.frame(group_name = group_name, Category = "paired_1to1", IBS = pair_df$pair_ibs[!is.na(pair_df$pair_ibs)], stringsAsFactors = FALSE)
+  )
+
   group_summary <- as.data.frame(
     table(
       group_name = rep(group_name, nrow(pair_df)),
@@ -163,5 +169,12 @@ if (!is.null(low_df) && nrow(low_df) > 0) {
 }
 
 draw_category_barplot(summary_df, file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_group_matching_summary.pdf")), paste(opt[["prefix"]], "matching categories by group"))
+
+collection_df <- do.call(rbind, collection_rows)
+draw_group_density_collection(
+  collection_df,
+  file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_all_groups_density.pdf")),
+  paste(opt[["prefix"]], "all-group IBS density collection")
+)
 
 cat("Completed pairwise matching for", length(names(map_df)) - 1, "groups against", anchor_col, "\n")

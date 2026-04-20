@@ -51,6 +51,7 @@ Core design:
 - RNA groups use Z23-first matching and B25 as rescue
 - Low-IBS / swapped samples are checked against anchor high-similarity clusters
 - `DETECTION_MODE=simple` can be used to disable B25 direct rescue and scan later groups only against the first-column cluster reference
+- RNA scan summaries include the within-group top 1% IBS background value and its difference from the 0.90 threshold, written to `*_threshold_check.log`
 
 Formal same-ploidy configs:
 

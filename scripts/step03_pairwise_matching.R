@@ -31,6 +31,7 @@ if (length(anchor_ids) == 0) stop("No anchor-group samples matched IBS matrix fo
 
 summary_list <- list()
 all_low <- list()
+log_lines <- character(0)
 
 for (group_name in names(map_df)[-1]) {
   group_ids_all <- standardize_id(map_df[[group_name]])
@@ -117,6 +118,16 @@ for (group_name in names(map_df)[-1]) {
     internal_vals <- numeric(0)
   }
 
+  top1pct_background <- if (length(internal_vals) > 0) as.numeric(quantile(internal_vals, probs = 0.99, na.rm = TRUE, names = FALSE, type = 7)) else NA_real_
+  threshold_gap <- if (!is.na(top1pct_background)) group_threshold - top1pct_background else NA_real_
+  log_line <- paste0(
+    "[", group_name, "] threshold=", sprintf("%.3f", group_threshold),
+    "; top1pct_background=", ifelse(is.na(top1pct_background), "NA", sprintf("%.3f", top1pct_background)),
+    "; threshold_minus_top1pct=", ifelse(is.na(threshold_gap), "NA", sprintf("%.3f", threshold_gap))
+  )
+  log_lines <- c(log_lines, log_line)
+  message(log_line)
+
   draw_density_plot(
     internal_vals = internal_vals,
     pair_vals = pair_df$pair_ibs,
@@ -136,12 +147,15 @@ for (group_name in names(map_df)[-1]) {
   )
   names(group_summary)[3] <- "count"
   group_summary$threshold <- group_threshold
+  group_summary$top1pct_background <- top1pct_background
+  group_summary$threshold_minus_top1pct <- threshold_gap
   summary_list[[group_name]] <- group_summary
   all_low[[group_name]] <- pair_df[pair_df$match_type %in% c("SWAPPED", "LOW_IBS", "NO_DATA"), , drop = FALSE]
 }
 
 summary_df <- do.call(rbind, summary_list)
 write.table(summary_df, file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_group_matching_summary.tsv")), sep = "\t", quote = FALSE, row.names = FALSE)
+writeLines(log_lines, con = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_threshold_check.log")))
 
 low_df <- do.call(rbind, all_low)
 if (!is.null(low_df) && nrow(low_df) > 0) {

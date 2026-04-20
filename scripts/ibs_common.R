@@ -187,9 +187,10 @@ build_similarity_clusters <- function(sample_ids, ibs_mat, threshold = 0.99) {
 draw_heatmap <- function(sub_mat, file, title, zlim = c(0.7, 1.0), show_values = TRUE) {
   if (is.null(sub_mat) || nrow(sub_mat) == 0 || ncol(sub_mat) == 0) return(invisible(NULL))
 
-  cols <- colorRampPalette(c(
-    "#440154", "#414487", "#2A788E", "#22A884", "#7AD151", "#FDE725"
-  ))(100)
+  cols <- colorRampPalette(rev(c(
+    "#A50026", "#D73027", "#F46D43", "#FDAE61", "#FEE090",
+    "#FFFFBF", "#E0F3F8", "#ABD9E9", "#74ADD1", "#4575B4", "#313695"
+  )))(100)
 
   nx <- ncol(sub_mat)
   ny <- nrow(sub_mat)

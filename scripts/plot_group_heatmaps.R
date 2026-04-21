@@ -19,7 +19,7 @@ anchor_col <- args[["anchor-col"]] %||% "Z23"
 secondary_col <- args[["secondary-col"]] %||% "B25"
 rna_groups <- strsplit(args[["rna-groups"]] %||% "TC FC SC", "[[:space:],]+")[[1]]
 rna_groups <- rna_groups[nzchar(rna_groups)]
-zmin <- as.numeric(args[["zmin"]] %||% "0.7")
+zmin <- as.numeric(args[["zmin"]] %||% "0.0")
 zmax <- as.numeric(args[["zmax"]] %||% "1.0")
 threshold <- as.numeric(args[["threshold"]] %||% "0.9")
 
@@ -39,7 +39,7 @@ threshold_palette <- function(zlim, threshold = 0.9) {
   list(colors = c(lower_cols, upper_cols), breaks = breaks)
 }
 
-draw_threshold_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", zlim = c(0.7, 1.0), threshold = 0.9) {
+draw_threshold_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", zlim = c(0.0, 1.0), threshold = 0.9, mark_diagonal = FALSE) {
   if (is.null(sub_mat) || nrow(sub_mat) == 0 || ncol(sub_mat) == 0) return(invisible(NULL))
 
   pal <- threshold_palette(zlim, threshold)
@@ -63,6 +63,17 @@ draw_threshold_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", z
   axis(2, at = seq_len(ny), labels = rev(rownames(sub_mat)), las = 1, cex.axis = 0.7)
   abline(h = seq(0.5, ny + 0.5, by = 1), col = "grey82")
   abline(v = seq(0.5, nx + 0.5, by = 1), col = "grey82")
+  if (mark_diagonal) {
+    diag_n <- min(nx, ny)
+    rect(
+      xleft = seq_len(diag_n) - 0.5,
+      ybottom = ny - seq_len(diag_n) + 0.5,
+      xright = seq_len(diag_n) + 0.5,
+      ytop = ny - seq_len(diag_n) + 1.5,
+      border = "#252525",
+      lwd = 1.4
+    )
+  }
   box(col = "grey50")
   for (i in seq_len(nx)) {
     for (j in seq_len(ny)) {
@@ -83,7 +94,7 @@ get_group_ids <- function(map_df, col_name, ibs_mat) {
   unique(ids)
 }
 
-build_expected_pair_matrix <- function(map_df, x_col, y_col, ibs_mat) {
+build_ordered_cross_matrix <- function(map_df, x_col, y_col, ibs_mat) {
   if (!(x_col %in% names(map_df)) || !(y_col %in% names(map_df))) {
     return(NULL)
   }
@@ -94,13 +105,10 @@ build_expected_pair_matrix <- function(map_df, x_col, y_col, ibs_mat) {
 
   x_ids <- x_ids[keep]
   y_ids <- y_ids[keep]
-  pair_mat <- matrix(NA_real_, nrow = length(y_ids), ncol = length(x_ids))
-  for (i in seq_along(y_ids)) {
-    pair_mat[i, i] <- ibs_mat[y_ids[i], x_ids[i]]
-  }
-  rownames(pair_mat) <- y_ids
-  colnames(pair_mat) <- x_ids
-  pair_mat
+  cross_mat <- ibs_mat[y_ids, x_ids, drop = FALSE]
+  rownames(cross_mat) <- y_ids
+  colnames(cross_mat) <- x_ids
+  cross_mat
 }
 
 draw_internal_if_available <- function(mat, map_df, group_col, prefix_root, dataset_label) {
@@ -117,7 +125,7 @@ draw_internal_if_available <- function(mat, map_df, group_col, prefix_root, data
 }
 
 draw_pair_if_available <- function(mat, map_df, x_col, y_col, prefix_root, dataset_label) {
-  pair_mat <- build_expected_pair_matrix(map_df, x_col, y_col, mat)
+  pair_mat <- build_ordered_cross_matrix(map_df, x_col, y_col, mat)
   if (is.null(pair_mat)) return(invisible(NULL))
   draw_threshold_heatmap(
     pair_mat,
@@ -126,7 +134,8 @@ draw_pair_if_available <- function(mat, map_df, x_col, y_col, prefix_root, datas
     xlab = x_col,
     ylab = y_col,
     zlim = c(zmin, zmax),
-    threshold = threshold
+    threshold = threshold,
+    mark_diagonal = TRUE
   )
 }
 

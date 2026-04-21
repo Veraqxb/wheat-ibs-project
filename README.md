@@ -97,6 +97,8 @@ Rscript scripts/plot_group_heatmaps.R \
   --rna-groups "TC FC SC"
 ```
 
+This script exports internal group heatmaps and ordered cross-group heatmaps. In cross-group plots, the anchor/reference group is placed on the x-axis, the query group is placed on the y-axis, and expected one-to-one pairs are outlined on the diagonal.
+
 ## Current Project Scope
 
 The project focuses on:

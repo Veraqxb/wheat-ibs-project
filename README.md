@@ -34,6 +34,10 @@ Main entry:
 
 Steps:
 
+- `scripts/two_group_internal_heatmaps.R`
+- `scripts/run_2cluster.R`
+- `scripts/samples.R`
+- `scripts/dna_diagnosis_summary.R`
 - `scripts/step00_vcf_to_ibs.sh`
 - `scripts/step01_prepare_matrix.R`
 - `scripts/step02_build_reference_cluster.R`
@@ -41,10 +45,17 @@ Steps:
 - `scripts/step04_diagnose_low_ibs.R`
 - `scripts/step05_cluster_rescue_and_summary.R`
 
+Project-level script roles:
+
+- `two_group_internal_heatmaps.R` performs focused `2group` DNA reference QC, including Z23/B25 duplicate clusters, assignment tables, expected-pair diagonal heatmap, full cross-group heatmap, and structure heatmaps.
+- `run_2cluster.R` batch-runs `two_group_internal_heatmaps.R` from a TSV config.
+- `samples.R` is the DNA-to-RNA joint diagnosis wrapper around the modular pipeline.
+- `dna_diagnosis_summary.R` summarizes TSV diagnosis outputs.
+
 Core design:
 
 - The first column of the sample map is used as the anchor reference group
-- Anchor-group clusters are defined by `IBS > 0.99`
+- Anchor-group clusters are defined by `IBS >= 0.99`
 - The same-ploidy `2group` dataset can be used as the reference cluster library for the downstream `5group` dataset
 - In `2group` reference mode, both `Z23` and `B25` clusters are built, their row-wise overlap is exported, and the combined cluster table is used for downstream rescue
 - Every downstream group is matched against the anchor in map order

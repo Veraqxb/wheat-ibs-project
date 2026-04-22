@@ -127,7 +127,7 @@ build_similarity_clusters <- function(sample_ids, ibs_mat, threshold = 0.99) {
 
   sub_mat <- ibs_mat[ids, ids, drop = FALSE]
   adj <- setNames(vector("list", length(ids)), ids)
-  hi_idx <- which(upper.tri(sub_mat) & !is.na(sub_mat) & sub_mat > threshold, arr.ind = TRUE)
+  hi_idx <- which(upper.tri(sub_mat) & !is.na(sub_mat) & sub_mat >= threshold, arr.ind = TRUE)
   if (nrow(hi_idx) > 0) {
     for (k in seq_len(nrow(hi_idx))) {
       a <- rownames(sub_mat)[hi_idx[k, 1]]

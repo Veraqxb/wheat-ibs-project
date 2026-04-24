@@ -32,14 +32,14 @@ query_mat <- read_mibs_matrix(args[["query-mibs"]], args[["query-id"]])
 threshold_palette <- function(zlim, threshold = 0.9) {
   threshold <- min(max(threshold, zlim[1]), zlim[2])
   lower_breaks <- seq(zlim[1], threshold, length.out = 31)
-  upper_breaks <- seq(threshold, zlim[2], length.out = 91)
+  upper_breaks <- seq(threshold, zlim[2], length.out = 121)
   breaks <- c(lower_breaks, upper_breaks[-1])
   lower_cols <- colorRampPalette(c("#F7F7F7", "#FFFFE5", "#FFF7BC"))(length(lower_breaks) - 1)
-  upper_cols <- colorRampPalette(c("#FEE090", "#FDAE61", "#F46D43", "#D73027", "#A50026"))(length(upper_breaks) - 1)
+  upper_cols <- colorRampPalette(c("#FEE090", "#FDAE61", "#F46D43", "#D73027", "#A50026", "#7F0000"))(length(upper_breaks) - 1)
   list(colors = c(lower_cols, upper_cols), breaks = breaks)
 }
 
-draw_threshold_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", zlim = c(0.0, 1.0), threshold = 0.9, mark_diagonal = FALSE) {
+draw_threshold_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", zlim = c(0.0, 1.0), threshold = 0.9, mark_diagonal = FALSE, na_col = "#000000") {
   if (is.null(sub_mat) || nrow(sub_mat) == 0 || ncol(sub_mat) == 0) return(invisible(NULL))
 
   pal <- threshold_palette(zlim, threshold)
@@ -48,10 +48,12 @@ draw_threshold_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", z
   pdf(file, width = max(8, nx * 0.5 + 3), height = max(8, ny * 0.5 + 3))
   par(mar = c(12, 12, 4, 2))
   image_mat <- t(sub_mat)[, ny:1, drop = FALSE]
+  image_fill <- image_mat
+  image_fill[is.na(image_fill)] <- zlim[1]
   image(
     x = seq_len(nx),
     y = seq_len(ny),
-    z = image_mat,
+    z = image_fill,
     col = pal$colors,
     breaks = pal$breaks,
     axes = FALSE,
@@ -63,6 +65,17 @@ draw_threshold_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", z
   axis(2, at = seq_len(ny), labels = rev(rownames(sub_mat)), las = 1, cex.axis = 0.7)
   abline(h = seq(0.5, ny + 0.5, by = 1), col = "grey82")
   abline(v = seq(0.5, nx + 0.5, by = 1), col = "grey82")
+  na_idx <- which(is.na(image_mat), arr.ind = TRUE)
+  if (nrow(na_idx) > 0) {
+    rect(
+      xleft = na_idx[, 1] - 0.5,
+      ybottom = na_idx[, 2] - 0.5,
+      xright = na_idx[, 1] + 0.5,
+      ytop = na_idx[, 2] + 0.5,
+      col = na_col,
+      border = NA
+    )
+  }
   if (mark_diagonal) {
     diag_n <- min(nx, ny)
     rect(
@@ -87,34 +100,79 @@ draw_threshold_heatmap <- function(sub_mat, file, title, xlab = "", ylab = "", z
   dev.off()
 }
 
-get_group_ids <- function(map_df, col_name, ibs_mat) {
-  if (!(col_name %in% names(map_df))) return(character(0))
-  ids <- standardize_id(map_df[[col_name]])
-  ids <- ids[!is.na(ids) & ids %in% rownames(ibs_mat)]
-  unique(ids)
+build_display_slots <- function(raw_ids, valid_ids) {
+  raw_ids <- standardize_id(raw_ids)
+  if (length(raw_ids) == 0) {
+    return(data.frame(actual_id = character(0), display_id = character(0), stringsAsFactors = FALSE))
+  }
+
+  display <- character(length(raw_ids))
+  seen <- list()
+  na_count <- 0L
+  for (i in seq_along(raw_ids)) {
+    cur <- raw_ids[[i]]
+    if (is.na(cur) || !(cur %in% valid_ids)) {
+      na_count <- na_count + 1L
+      display[[i]] <- sprintf("NA_%03d", na_count)
+    } else {
+      seen[[cur]] <- (seen[[cur]] %||% 0L) + 1L
+      display[[i]] <- if (seen[[cur]] > 1L) sprintf("%s#%d", cur, seen[[cur]]) else cur
+    }
+  }
+  data.frame(actual_id = raw_ids, display_id = display, stringsAsFactors = FALSE)
+}
+
+build_internal_map_matrix <- function(map_df, group_col, ibs_mat) {
+  if (!(group_col %in% names(map_df))) {
+    return(NULL)
+  }
+
+  slots <- build_display_slots(map_df[[group_col]], rownames(ibs_mat))
+  if (nrow(slots) == 0) return(NULL)
+
+  out <- matrix(NA_real_, nrow = nrow(slots), ncol = nrow(slots))
+  rownames(out) <- slots$display_id
+  colnames(out) <- slots$display_id
+
+  for (i in seq_len(nrow(slots))) {
+    for (j in seq_len(nrow(slots))) {
+      a <- slots$actual_id[[i]]
+      b <- slots$actual_id[[j]]
+      if (!is.na(a) && !is.na(b) && a %in% rownames(ibs_mat) && b %in% colnames(ibs_mat)) {
+        out[i, j] <- ibs_mat[a, b]
+      }
+    }
+  }
+  out
 }
 
 build_ordered_cross_matrix <- function(map_df, x_col, y_col, ibs_mat) {
   if (!(x_col %in% names(map_df)) || !(y_col %in% names(map_df))) {
     return(NULL)
   }
-  x_ids <- standardize_id(map_df[[x_col]])
-  y_ids <- standardize_id(map_df[[y_col]])
-  keep <- !is.na(x_ids) & !is.na(y_ids) & x_ids %in% colnames(ibs_mat) & y_ids %in% rownames(ibs_mat)
-  if (!any(keep)) return(NULL)
+  x_slots <- build_display_slots(map_df[[x_col]], colnames(ibs_mat))
+  y_slots <- build_display_slots(map_df[[y_col]], rownames(ibs_mat))
+  if (nrow(x_slots) == 0 || nrow(y_slots) == 0) return(NULL)
 
-  x_ids <- x_ids[keep]
-  y_ids <- y_ids[keep]
-  cross_mat <- ibs_mat[y_ids, x_ids, drop = FALSE]
-  rownames(cross_mat) <- y_ids
-  colnames(cross_mat) <- x_ids
-  cross_mat
+  out <- matrix(NA_real_, nrow = nrow(y_slots), ncol = nrow(x_slots))
+  rownames(out) <- y_slots$display_id
+  colnames(out) <- x_slots$display_id
+
+  for (i in seq_len(nrow(y_slots))) {
+    for (j in seq_len(nrow(x_slots))) {
+      y_id <- y_slots$actual_id[[i]]
+      x_id <- x_slots$actual_id[[j]]
+      if (!is.na(y_id) && !is.na(x_id) && y_id %in% rownames(ibs_mat) && x_id %in% colnames(ibs_mat)) {
+        out[i, j] <- ibs_mat[y_id, x_id]
+      }
+    }
+  }
+  out
 }
 
 draw_internal_if_available <- function(mat, map_df, group_col, prefix_root, dataset_label) {
-  ids <- get_group_ids(map_df, group_col, mat)
-  if (length(ids) < 2) return(invisible(NULL))
-  sub_mat <- mat[ids, ids, drop = FALSE]
+  sub_mat <- build_internal_map_matrix(map_df, group_col, mat)
+  if (is.null(sub_mat) || nrow(sub_mat) == 0) return(invisible(NULL))
   draw_threshold_heatmap(
     sub_mat,
     file.path(args[["outdir"]], paste0(prefix_root, "_", dataset_label, "_", group_col, "_internal_heatmap.pdf")),

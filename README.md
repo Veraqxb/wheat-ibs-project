@@ -36,6 +36,7 @@ Steps:
 
 - `scripts/two_group_internal_heatmaps.R`
 - `scripts/run_2cluster.R`
+- `scripts/two_group_ibs_density_thresholds.R`
 - `scripts/samples.R`
 - `scripts/dna_diagnosis_summary.R`
 - `scripts/step00_vcf_to_ibs.sh`
@@ -48,7 +49,8 @@ Steps:
 Project-level script roles:
 
 - `two_group_internal_heatmaps.R` performs focused `2group` DNA reference QC, including Z23/B25 duplicate clusters, assignment tables, expected-pair diagonal heatmap, full cross-group heatmap, and structure heatmaps.
-- `run_2cluster.R` batch-runs `two_group_internal_heatmaps.R` from a TSV config.
+- `run_2cluster.R` batch-runs `two_group_internal_heatmaps.R` and the 2group density-threshold analysis from either a TSV config or automatic `ibs_file/` discovery.
+- `two_group_ibs_density_thresholds.R` compares Z23-within, B25-within, full between-group, and expected-pair IBS distributions, then writes density/ECDF/boxplot outputs plus a threshold recommendation table.
 - `samples.R` is the DNA-to-RNA joint diagnosis wrapper around the modular pipeline.
 - `dna_diagnosis_summary.R` summarizes TSV diagnosis outputs.
 
@@ -85,6 +87,18 @@ bash scripts/wheat_ibs_modular_pipeline.sh configs/C2_modular.config.sh
 bash scripts/wheat_ibs_modular_pipeline.sh configs/C4_modular.config.sh
 bash scripts/wheat_ibs_modular_pipeline.sh configs/C6_modular.config.sh
 ```
+
+Focused 2group reference QC:
+
+```bash
+Rscript scripts/run_2cluster.R \
+  --ibs-dir ibs_file \
+  --map-dir maps \
+  --info-file camp_info.txt \
+  --outdir all_2group_internal_heatmaps
+```
+
+This single command generates Z23/B25 internal cluster heatmaps, expected Z23-B25 heatmaps, duplicate-cluster tables, and 2group IBS density-threshold plots.
 
 To write the three same-ploidy config files directly on the server so they stay identical to the repository templates:
 

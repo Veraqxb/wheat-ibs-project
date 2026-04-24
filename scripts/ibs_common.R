@@ -184,24 +184,37 @@ build_similarity_clusters <- function(sample_ids, ibs_mat, threshold = 0.99) {
   )
 }
 
-draw_heatmap <- function(sub_mat, file, title, zlim = c(0.7, 1.0), show_values = TRUE) {
+draw_heatmap <- function(sub_mat, file, title, zlim = c(0.7, 1.0), show_values = TRUE, na_col = "#000000") {
   if (is.null(sub_mat) || nrow(sub_mat) == 0 || ncol(sub_mat) == 0) return(invisible(NULL))
 
-  cols <- colorRampPalette(rev(c(
-    "#A50026", "#D73027", "#F46D43", "#FDAE61", "#FEE090",
-    "#FFFFBF", "#E0F3F8", "#ABD9E9", "#74ADD1", "#4575B4", "#313695"
-  )))(100)
+  cols <- colorRampPalette(c(
+    "#313695", "#4575B4", "#74ADD1", "#ABD9E9", "#E0F3F8",
+    "#FFFFBF", "#FEE090", "#FDAE61", "#F46D43", "#D73027", "#A50026", "#7F0000"
+  ))(120)
 
   nx <- ncol(sub_mat)
   ny <- nrow(sub_mat)
   pdf(file, width = max(8, nx * 0.45 + 3), height = max(8, ny * 0.45 + 3))
   par(mar = c(12, 12, 4, 2))
   image_mat <- t(sub_mat)[, ny:1, drop = FALSE]
-  image(seq_len(nx), seq_len(ny), image_mat, col = cols, axes = FALSE, zlim = zlim, main = title, xlab = "", ylab = "")
+  image_fill <- image_mat
+  image_fill[is.na(image_fill)] <- zlim[1]
+  image(seq_len(nx), seq_len(ny), image_fill, col = cols, axes = FALSE, zlim = zlim, main = title, xlab = "", ylab = "")
   axis(1, at = seq_len(nx), labels = colnames(sub_mat), las = 2, cex.axis = 0.7)
   axis(2, at = seq_len(ny), labels = rev(rownames(sub_mat)), las = 1, cex.axis = 0.7)
   abline(h = seq(0.5, ny + 0.5, by = 1), col = "grey80")
   abline(v = seq(0.5, nx + 0.5, by = 1), col = "grey80")
+  na_idx <- which(is.na(image_mat), arr.ind = TRUE)
+  if (nrow(na_idx) > 0) {
+    rect(
+      xleft = na_idx[, 1] - 0.5,
+      ybottom = na_idx[, 2] - 0.5,
+      xright = na_idx[, 1] + 0.5,
+      ytop = na_idx[, 2] + 0.5,
+      col = na_col,
+      border = NA
+    )
+  }
   box(col = "grey50")
   if (show_values) {
     for (i in seq_len(nx)) {

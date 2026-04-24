@@ -42,6 +42,35 @@ if (!is.na(label_col)) {
   summary_df <- as.data.frame(table(label = combined[[label_col]], useNA = "ifany"), stringsAsFactors = FALSE)
   names(summary_df) <- c("label", "count")
   write.table(summary_df, file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_diagnosis_label_summary.tsv")), sep = "\t", quote = FALSE, row.names = FALSE)
+
+  taxa_col <- if ("Taxa" %in% names(combined)) {
+    "Taxa"
+  } else if ("taxa" %in% names(combined)) {
+    "taxa"
+  } else {
+    NA_character_
+  }
+
+  if (!is.na(taxa_col)) {
+    taxa_df <- combined[, c(taxa_col, label_col), drop = FALSE]
+    names(taxa_df) <- c("taxa", "label")
+    taxa_df$taxa <- standardize_id(taxa_df$taxa)
+    taxa_df$label <- standardize_id(taxa_df$label)
+    taxa_df$taxa[is.na(taxa_df$taxa)] <- "Unknown"
+    taxa_df$label[is.na(taxa_df$label)] <- "NA"
+
+    taxa_long <- as.data.frame(table(taxa = taxa_df$taxa, label = taxa_df$label), stringsAsFactors = FALSE)
+    names(taxa_long) <- c("taxa", "label", "count")
+    taxa_long <- taxa_long[taxa_long$count > 0, , drop = FALSE]
+    write.table(taxa_long, file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_taxa_diagnosis_count_long.tsv")), sep = "\t", quote = FALSE, row.names = FALSE)
+
+    taxa_wide <- reshape(taxa_long, idvar = "taxa", timevar = "label", direction = "wide")
+    names(taxa_wide) <- sub("^count\\.", "", names(taxa_wide))
+    taxa_wide[is.na(taxa_wide)] <- 0
+    taxa_wide$total_n <- rowSums(taxa_wide[, setdiff(names(taxa_wide), "taxa"), drop = FALSE])
+    taxa_wide <- taxa_wide[, c("taxa", "total_n", setdiff(names(taxa_wide), c("taxa", "total_n"))), drop = FALSE]
+    write.table(taxa_wide, file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_taxa_diagnosis_count_table.tsv")), sep = "\t", quote = FALSE, row.names = FALSE)
+  }
 }
 
 cat("Summarized", length(files), "diagnosis files\n")

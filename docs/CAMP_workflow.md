@@ -37,10 +37,24 @@ The pipeline keeps two matrix concepts separate whenever `NA` values matter.
 ## Main Script Roles
 
 - `two_group_internal_heatmaps.R`: focused `2group` DNA reference QC.
-- `run_2cluster.R`: batch runner for multiple `2group` inputs.
+- `run_2cluster.R`: batch runner for multiple `2group` inputs, including internal heatmaps and IBS density-threshold plots.
+- `two_group_ibs_density_thresholds.R`: focused threshold sanity-check for `2group` DNA reference data.
 - `samples.R`: DNA-to-RNA joint diagnosis entry point using the modular workflow.
 - `dna_diagnosis_summary.R`: compact summary of final diagnosis outputs.
 - `wheat_ibs_modular_pipeline.sh`: canonical full pipeline entry.
+
+## Simplified Operating Model
+
+The workflow should be kept to three user-facing layers.
+
+- Layer 1: matrix generation.
+  Use `wheat_ibs_modular_pipeline.sh` in `VCF mode` only when `.mibs/.mibs.id` must be regenerated from VCF.
+- Layer 2: DNA reference QC.
+  Use `run_2cluster.R` for all same-ploidy `2group` files. This produces cluster tables, duplicate-pair tables, map-order heatmaps, expected-pair heatmaps, and density-threshold diagnostics in one run.
+- Layer 3: query diagnosis and reporting.
+  Use the modular pipeline in `IBS mode` for 5group/6group diagnosis, then use the summary/report scripts for final tables and presentation figures.
+
+This keeps the project from splitting into many manual one-off scripts while preserving the existing decision rules.
 
 ## Outputs
 

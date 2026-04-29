@@ -1,6 +1,9 @@
 #!/usr/bin/env Rscript
 
-source(file.path(dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)[1]))), "ibs_common.R"))
+script_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)[1]
+script_path <- if (length(script_arg) == 0 || is.na(script_arg)) getwd() else sub("^--file=", "", script_arg)
+script_path <- gsub("~\\+~", " ", script_path, fixed = FALSE)
+source(file.path(dirname(normalizePath(script_path)), "ibs_common.R"))
 
 opt <- parse_args(commandArgs(trailingOnly = TRUE))
 required <- c("matrix", "map", "cluster-table", "pairwise-dir", "outdir", "prefix")
@@ -13,6 +16,7 @@ opt[["rna-groups"]] <- opt[["rna-groups"]] %||% "TC SC FC"
 opt[["dna-threshold"]] <- opt[["dna-threshold"]] %||% "0.99"
 opt[["rna-threshold"]] <- opt[["rna-threshold"]] %||% "0.90"
 opt[["detection-mode"]] <- opt[["detection-mode"]] %||% "full"
+opt[["reference-context"]] <- opt[["reference-context"]] %||% ""
 
 dir.create(opt[["outdir"]], recursive = TRUE, showWarnings = FALSE)
 map_df <- read_sample_map(opt[["map"]])
@@ -36,6 +40,49 @@ names(pair_tables) <- sub("^.*_([^_/]+)_vs_.*_pairwise\\.tsv$", "\\1", basename(
 
 if (!(secondary_col %in% names(pair_tables))) {
   warning("Secondary reference group pairwise table not found for ", secondary_col, "; RNA rescue will use direct IBS lookup only.")
+}
+
+reference_context_df <- data.frame()
+if (nzchar(opt[["reference-context"]]) && file.exists(opt[["reference-context"]])) {
+  reference_context_df <- read.table(opt[["reference-context"]], header = TRUE, sep = "\t", stringsAsFactors = FALSE, check.names = FALSE)
+  if (!("row_index" %in% names(reference_context_df))) {
+    warning("Reference context file has no row_index column and will be ignored: ", opt[["reference-context"]])
+    reference_context_df <- data.frame()
+  }
+}
+
+reference_context_lookup <- if (nrow(reference_context_df) > 0) {
+  split(reference_context_df, reference_context_df$row_index)
+} else {
+  list()
+}
+
+get_reference_context <- function(row_index) {
+  hit <- reference_context_lookup[[as.character(row_index)]]
+  if (is.null(hit) || nrow(hit) == 0) {
+    return(list(
+      reference_context_class = NA_character_,
+      reference_confidence = "unknown",
+      reference_best_Z23 = NA_character_,
+      reference_best_Z23_ibs = NA_real_,
+      reference_best_B25 = NA_character_,
+      reference_best_B25_ibs = NA_real_,
+      expected_secondary_id = NA_character_
+    ))
+  }
+  list(
+    reference_context_class = hit$dna_diagnosis_short[1],
+    reference_confidence = hit$reference_confidence[1],
+    reference_best_Z23 = hit$best_Z23[1],
+    reference_best_Z23_ibs = hit$best_Z23_ibs[1],
+    reference_best_B25 = hit$best_B25[1],
+    reference_best_B25_ibs = hit$best_B25_ibs[1],
+    expected_secondary_id = hit$secondary_id[1]
+  )
+}
+
+reference_can_rescue <- function(ctx) {
+  !(ctx$reference_confidence %in% c("exclude"))
 }
 
 cluster_lookup <- split(cluster_df, paste(cluster_df$reference_group, cluster_df$sample_id, sep = "||"))
@@ -90,24 +137,48 @@ for (group_name in names(map_df)[-1]) {
     match_info <- row$match_info
     final_ibs <- row$pair_ibs
     matched_id <- row$anchor_id
+    ctx <- get_reference_context(row$row_index)
+    expected_secondary_id <- if (!is.na(ctx$expected_secondary_id)) {
+      ctx$expected_secondary_id
+    } else if (secondary_col %in% names(map_df)) {
+      standardize_id(map_df[[secondary_col]][row$row_index])
+    } else {
+      NA_character_
+    }
+    rescue_source <- "Z23_expected"
 
     if (group_name %in% rna_groups) {
-      secondary_expected <- if (secondary_col %in% names(map_df)) standardize_id(map_df[[secondary_col]][row$row_index]) else NA_character_
-      secondary_res <- compute_secondary_match(row$query_id, secondary_expected, group_threshold)
+      secondary_res <- compute_secondary_match(row$query_id, expected_secondary_id, group_threshold)
 
       if (identical(match_type, "MATCH")) {
         match_type <- "MATCH_Z23"
         match_info <- paste("Matched expected", anchor_col)
         matched_id <- row$anchor_id
         final_ibs <- row$pair_ibs
-      } else if (opt[["detection-mode"]] != "simple" && identical(secondary_res$match_type, "MATCH")) {
+        rescue_source <- "Z23_expected"
+      } else if (opt[["detection-mode"]] != "simple" && identical(secondary_res$match_type, "MATCH") && reference_can_rescue(ctx)) {
         match_type <- "RESCUED_B25"
-        match_info <- paste("Unmatched to", anchor_col, "but rescued by", secondary_col, secondary_res$best_match)
+        match_info <- paste(
+          "Unmatched to", anchor_col,
+          "but rescued by", secondary_col, secondary_res$best_match,
+          "(2group reference:", ctx$reference_context_class, ")"
+        )
         matched_id <- secondary_res$best_match
         final_ibs <- secondary_res$best_ibs
+        rescue_source <- "B25_expected"
+      } else if (opt[["detection-mode"]] != "simple" && identical(secondary_res$match_type, "MATCH") && !reference_can_rescue(ctx)) {
+        match_type <- "REVIEW_B25_CONTEXT_RISK"
+        match_info <- paste(
+          "B25 rescue IBS passed, but 2group reference context is",
+          ctx$reference_context_class,
+          "- manual review required"
+        )
+        matched_id <- secondary_res$best_match
+        final_ibs <- secondary_res$best_ibs
+        rescue_source <- "B25_expected_context_risk"
       } else {
         cluster_members <- cluster_members_for(anchor_col, row$anchor_id)
-        secondary_cluster_members <- if (opt[["detection-mode"]] != "simple" && !is.na(secondary_expected)) cluster_members_for(secondary_col, secondary_expected) else character(0)
+        secondary_cluster_members <- if (opt[["detection-mode"]] != "simple" && !is.na(expected_secondary_id) && reference_can_rescue(ctx)) cluster_members_for(secondary_col, expected_secondary_id) else character(0)
         neighbor_candidates <- c(row$best_anchor, if (opt[["detection-mode"]] != "simple") secondary_res$best_match else NA_character_)
         rescue_hit <- intersect(cluster_members, neighbor_candidates)
         secondary_rescue_hit <- intersect(secondary_cluster_members, neighbor_candidates)
@@ -120,6 +191,7 @@ for (group_name in names(map_df)[-1]) {
           } else if (!is.na(secondary_res$best_ibs) && secondary_res$best_match == rescue_hit[1]) {
             final_ibs <- secondary_res$best_ibs
           }
+          rescue_source <- "Z23_cluster"
         } else if (length(secondary_rescue_hit) > 0) {
           match_type <- "RESCUED_CLUSTER"
           match_info <- paste("Rescued by", secondary_col, "cluster neighbor", secondary_rescue_hit[1])
@@ -129,46 +201,64 @@ for (group_name in names(map_df)[-1]) {
           } else if (!is.na(row$best_anchor_ibs) && row$best_anchor == secondary_rescue_hit[1]) {
             final_ibs <- row$best_anchor_ibs
           }
+          rescue_source <- "B25_cluster"
         } else if (identical(match_type, "SWAPPED")) {
           match_type <- "SWAPPED"
           match_info <- paste("Best anchor is", row$best_anchor, "instead of expected", row$anchor_id)
           matched_id <- row$best_anchor
           final_ibs <- row$best_anchor_ibs
+          rescue_source <- "Z23_best_shift"
         } else if (identical(match_type, "NO_DATA")) {
           match_type <- "NO_DATA"
           match_info <- "No usable IBS values against Z23/B25"
           matched_id <- NA_character_
           final_ibs <- NA_real_
+          rescue_source <- "missing"
         } else {
           match_type <- "DROP"
           match_info <- paste("Unmatched to", anchor_col, "and", secondary_col)
           matched_id <- row$best_anchor
           final_ibs <- row$best_anchor_ibs
+          rescue_source <- "unresolved"
         }
       }
     } else {
       if (identical(match_type, "MATCH")) {
         match_type <- "MATCH_Z23"
         match_info <- paste("Expected anchor matched", anchor_col)
+        rescue_source <- "Z23_expected"
       } else if (identical(match_type, "SWAPPED")) {
         match_type <- "SWAPPED"
         match_info <- paste("Best anchor is", row$best_anchor)
         matched_id <- row$best_anchor
         final_ibs <- row$best_anchor_ibs
+        rescue_source <- "Z23_best_shift"
       } else if (identical(match_type, "NO_DATA")) {
         match_type <- "NO_DATA"
+        rescue_source <- "missing"
       } else {
         match_type <- "DROP"
         match_info <- paste("Expected and best anchor below", sprintf("%.2f", group_threshold))
+        rescue_source <- "unresolved"
       }
     }
 
     group_rows[[i]] <- data.frame(
+      row_index = row$row_index,
       sample_id = sample_id,
       group_name = group_name,
+      expected_anchor_id = row$anchor_id,
+      expected_secondary_id = expected_secondary_id,
       matched_id = matched_id,
       ibs = final_ibs,
       match_type = match_type,
+      rescue_source = rescue_source,
+      reference_context_class = ctx$reference_context_class,
+      reference_confidence = ctx$reference_confidence,
+      reference_best_Z23 = ctx$reference_best_Z23,
+      reference_best_Z23_ibs = ctx$reference_best_Z23_ibs,
+      reference_best_B25 = ctx$reference_best_B25,
+      reference_best_B25_ibs = ctx$reference_best_B25_ibs,
       match_info = match_info,
       stringsAsFactors = FALSE
     )
@@ -194,7 +284,7 @@ summary_df <- do.call(rbind, summary_rows)
 names(summary_df)[3] <- "count"
 write.table(summary_df, file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_matching_summary.tsv")), sep = "\t", quote = FALSE, row.names = FALSE)
 
-low_df <- full_simple[full_simple$match_type %in% c("SWAPPED", "DROP", "NO_DATA"), , drop = FALSE]
+low_df <- full_simple[full_simple$match_type %in% c("SWAPPED", "DROP", "NO_DATA", "REVIEW_B25_CONTEXT_RISK"), , drop = FALSE]
 write.table(low_df, file = file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_low_ibs_sample_table.tsv")), sep = "\t", quote = FALSE, row.names = FALSE)
 
 rna_mismatch_df <- full_simple[full_simple$group_name %in% rna_groups & full_simple$match_type == "DROP", , drop = FALSE]

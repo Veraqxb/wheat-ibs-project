@@ -6,7 +6,10 @@ suppressPackageStartupMessages({
 
 script_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)[1]
 if (is.na(script_arg)) stop("Cannot determine script path for two_group_internal_heatmaps.R")
-script_dirname <- dirname(normalizePath(sub("^--file=", "", script_arg)))
+script_path <- sub("^--file=", "", script_arg)
+# Rscript can encode spaces in --file paths as "~+~" on some systems.
+script_path <- gsub("~\\+~", " ", script_path, fixed = FALSE)
+script_dirname <- dirname(normalizePath(script_path))
 source(file.path(script_dirname, "ibs_common.R"))
 
 opt <- parse_args(commandArgs(trailingOnly = TRUE))
@@ -78,7 +81,11 @@ build_internal_map_matrix <- function(map_df, col_name, ibs_mat) {
       out[i, j] <- ibs_mat[slots$resolved_id[i], slots$resolved_id[j]]
     }
   }
-
+  # Internal self-comparisons for real samples should be displayed as IBS=1.
+  # Missing map slots remain NA, so they are still shown with the NA color.
+  if (length(valid_idx) > 0) {
+    out[cbind(valid_idx, valid_idx)] <- 1
+  }
   list(matrix = out, slots = slots)
 }
 
@@ -102,23 +109,28 @@ build_cross_display_matrix <- function(map_df, anchor_col, secondary_col, ibs_ma
 }
 
 build_display_number_matrix <- function(mat) {
-  nm <- matrix("NA", nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  nm <- matrix("", nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
   nm[!is.na(mat)] <- sprintf("%.3f", mat[!is.na(mat)])
   nm
 }
 
 heatmap_palette <- function(zmin, zmax) {
   colors <- c(
-    colorRampPalette(c("#2166AC", "#67A9CF", "#D1E5F0"))(35),
-    colorRampPalette(c("#F7F7F7", "#FDDBC7", "#F4A582"))(25),
-    colorRampPalette(c("#D6604D", "#B2182B", "#7F0000"))(40)
+    colorRampPalette(c("#2166AC", "#67A9CF"))(40),  # <0.90 blue
+    colorRampPalette(c("#D9F0A3", "#A6D96A"))(20),  # 0.90-0.95 light green
+    colorRampPalette(c("#FFF7BC", "#FEE391"))(20),  # 0.95-0.99 light yellow
+    colorRampPalette(c("#FB6A4A", "#CB181D"))(20)   # >=0.99 red
   )
+  # pheatmap requires length(breaks) == length(colors) + 1.
+  # Drop the first break of each later segment to avoid over-indexing
+  # high IBS values such as 1.0 into the NA color.
   breaks <- c(
-    seq(zmin, 0.90, length.out = 36),
-    seq(0.900001, 0.99, length.out = 26),
-    seq(0.990001, zmax + 1e-06, length.out = 41)
+    seq(zmin, 0.90, length.out = 41),
+    seq(0.900001, 0.95, length.out = 21)[-1],
+    seq(0.950001, 0.99, length.out = 21)[-1],
+    seq(0.990001, zmax + 1e-06, length.out = 21)[-1]
   )
-  list(colors = colors, breaks = breaks)
+  list(colors = colors, breaks = breaks, na_col = "#4D4D4D")
 }
 
 build_group_annotation <- function(sample_ids, info_dt, group_name) {
@@ -141,7 +153,10 @@ build_group_annotation <- function(sample_ids, info_dt, group_name) {
   tmp$sample_id <- standardize_id(tmp$sample_id)
   tmp$GROUP <- standardize_id(tmp$GROUP)
   tmp <- tmp[!is.na(tmp$sample_id) & tmp$sample_id != "", , drop = FALSE]
-  ann <- data.frame(sample_id = sample_ids, stringsAsFactors = FALSE)
+  # camp_info may contain repeated sample rows; keep the first annotation per ID
+  # so pheatmap receives unique row names.
+  tmp <- tmp[!duplicated(tmp$sample_id), , drop = FALSE]
+  ann <- data.frame(sample_id = unique(sample_ids), stringsAsFactors = FALSE)
   ann <- merge(ann, tmp, by = "sample_id", all.x = TRUE, sort = FALSE)
   ann$GROUP[is.na(ann$GROUP) | ann$GROUP == ""] <- "Unknown"
   rownames(ann) <- ann$sample_id
@@ -161,6 +176,21 @@ make_group_colors <- function(groups) {
   cols <- palette_pool[seq_along(groups)]
   names(cols) <- groups
   list(GROUP = cols)
+}
+
+build_slot_annotation <- function(slots, info_df, group_name) {
+  ann_valid <- build_group_annotation(slots$resolved_id[!is.na(slots$resolved_id)], info_df, group_name)
+  ann_full <- data.frame(
+    GROUP = rep("Missing", nrow(slots)),
+    row.names = slots$display_id,
+    stringsAsFactors = FALSE
+  )
+  if (!is.null(ann_valid)) {
+    valid_ann_idx <- match(rownames(ann_valid), slots$resolved_id)
+    valid_ann_idx <- valid_ann_idx[!is.na(valid_ann_idx)]
+    ann_full$GROUP[valid_ann_idx] <- ann_valid$GROUP
+  }
+  ann_full
 }
 
 map_order <- data.frame(
@@ -213,12 +243,41 @@ heat_cfg <- heatmap_palette(zmin, zmax)
 
 pheatmap_with_consistent_style <- function(mat, file, main, annotation_row = NULL, annotation_col = NULL,
                                            annotation_colors = NULL, cluster_rows = FALSE, cluster_cols = FALSE,
-                                           width_scale = 0.35, height_scale = 0.35) {
-  show_numbers <- max(nrow(mat), ncol(mat)) <= 80
+                                           width_scale = 0.35, height_scale = 0.35,
+                                           force_numbers = FALSE) {
+  nmax <- max(nrow(mat), ncol(mat))
+  if (force_numbers) {
+    plot_width <- max(10, min(180, 4 + ncol(mat) * max(width_scale, 0.31)))
+    plot_height <- max(10, min(180, 4 + nrow(mat) * max(height_scale, 0.31)))
+  } else {
+    plot_width <- max(8, min(72, 4 + ncol(mat) * width_scale))
+    plot_height <- max(8, min(72, 4 + nrow(mat) * height_scale))
+  }
+  label_font <- if (nmax <= 80) {
+    5
+  } else if (nmax <= 220) {
+    3
+  } else if (nmax <= 650) {
+    1.7
+  } else {
+    1.2
+  }
+  number_font <- if (nmax <= 30) {
+    8
+  } else if (nmax <= 80) {
+    5
+  } else if (nmax <= 220) {
+    2.2
+  } else if (nmax <= 650) {
+    if (force_numbers) 2.6 else 1.2
+  } else {
+    if (force_numbers) 1.2 else 0.8
+  }
+  # The explicit *_with_IBS_values.pdf outputs must always contain IBS labels.
+  # Non-value versions stay clean for structure-level viewing.
+  show_numbers <- force_numbers || nmax <= 80
   disp_mat <- if (show_numbers) build_display_number_matrix(mat) else FALSE
-  pdf(file,
-      width = max(8, min(30, 4 + ncol(mat) * width_scale)),
-      height = max(8, min(30, 4 + nrow(mat) * height_scale)))
+  pdf(file, width = plot_width, height = plot_height)
   pheatmap(
     mat,
     cluster_rows = cluster_rows,
@@ -227,10 +286,14 @@ pheatmap_with_consistent_style <- function(mat, file, main, annotation_row = NUL
     annotation_col = annotation_col,
     annotation_colors = annotation_colors,
     display_numbers = disp_mat,
-    fontsize_number = if (max(nrow(mat), ncol(mat)) <= 30) 8 else 5,
+    fontsize = label_font,
+    fontsize_row = label_font,
+    fontsize_col = label_font,
+    fontsize_number = number_font,
+    angle_col = 90,
     color = heat_cfg$colors,
     breaks = heat_cfg$breaks,
-    na_col = "#000000",
+    na_col = heat_cfg$na_col,
     border_color = NA,
     main = main
   )
@@ -336,6 +399,12 @@ secondary_ids <- standardize_id(map_df[[secondary_col]])
 
 cross_info <- build_cross_display_matrix(map_df, anchor_col, secondary_col, ibs_mat)
 cross_mat <- cross_info$matrix
+ann_cross_row <- build_slot_annotation(cross_info$secondary_slots, info_df, secondary_col)
+ann_cross_col <- build_slot_annotation(cross_info$anchor_slots, info_df, anchor_col)
+ann_cross_colors <- make_group_colors(c(ann_cross_row$GROUP, ann_cross_col$GROUP))
+if (!("Missing" %in% names(ann_cross_colors$GROUP))) {
+  ann_cross_colors$GROUP <- c(ann_cross_colors$GROUP, Missing = "#000000")
+}
 
 pair_table <- data.frame(
   row_index = seq_len(nrow(map_df)),
@@ -376,7 +445,57 @@ write.table(pair_summary, file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_p
 
 diag_mat <- matrix(NA_real_, nrow = nrow(cross_mat), ncol = ncol(cross_mat), dimnames = dimnames(cross_mat))
 for (i in seq_len(min(nrow(diag_mat), ncol(diag_mat)))) diag_mat[i, i] <- cross_mat[i, i]
-draw_heatmap(diag_mat, file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_", secondary_col, "_vs_", anchor_col, "_expected_diagonal_heatmap.pdf")), paste(opt[["prefix"]], secondary_col, "vs", anchor_col, "expected pair diagonal"), zlim = c(zmin, zmax))
-draw_heatmap(cross_mat, file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_", secondary_col, "_x_", anchor_col, "_full_cross_heatmap.pdf")), paste(opt[["prefix"]], secondary_col, "x", anchor_col, "full cross-group IBS"), zlim = c(zmin, zmax))
+pheatmap_with_consistent_style(
+  diag_mat,
+  file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_", secondary_col, "_vs_", anchor_col, "_expected_diagonal_heatmap.pdf")),
+  paste(opt[["prefix"]], secondary_col, "vs", anchor_col, "expected pair diagonal"),
+  annotation_row = ann_cross_row,
+  annotation_col = ann_cross_col,
+  annotation_colors = ann_cross_colors,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  width_scale = 0.30,
+  height_scale = 0.30,
+  force_numbers = FALSE
+)
+pheatmap_with_consistent_style(
+  diag_mat,
+  file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_", secondary_col, "_vs_", anchor_col, "_expected_diagonal_heatmap_with_IBS_values.pdf")),
+  paste(opt[["prefix"]], secondary_col, "vs", anchor_col, "expected pair diagonal + IBS values"),
+  annotation_row = ann_cross_row,
+  annotation_col = ann_cross_col,
+  annotation_colors = ann_cross_colors,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  width_scale = 0.30,
+  height_scale = 0.30,
+  force_numbers = TRUE
+)
+pheatmap_with_consistent_style(
+  cross_mat,
+  file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_", secondary_col, "_x_", anchor_col, "_full_cross_heatmap.pdf")),
+  paste(opt[["prefix"]], secondary_col, "x", anchor_col, "full cross-group IBS"),
+  annotation_row = ann_cross_row,
+  annotation_col = ann_cross_col,
+  annotation_colors = ann_cross_colors,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  width_scale = 0.28,
+  height_scale = 0.28,
+  force_numbers = FALSE
+)
+pheatmap_with_consistent_style(
+  cross_mat,
+  file.path(opt[["outdir"]], paste0(opt[["prefix"]], "_", secondary_col, "_x_", anchor_col, "_full_cross_heatmap_with_IBS_values.pdf")),
+  paste(opt[["prefix"]], secondary_col, "x", anchor_col, "full cross-group IBS + IBS values"),
+  annotation_row = ann_cross_row,
+  annotation_col = ann_cross_col,
+  annotation_colors = ann_cross_colors,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  width_scale = 0.28,
+  height_scale = 0.28,
+  force_numbers = TRUE
+)
 
 cat("Completed 2group DNA internal and cross-group QC for", opt[["prefix"]], "\n")

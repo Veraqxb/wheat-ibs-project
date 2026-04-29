@@ -81,13 +81,14 @@ REF_ROOT="${WORK_ROOT}/reference_2group"
 QUERY_ROOT="${WORK_ROOT}/query_5group"
 STEP01_REF_DIR="${REF_ROOT}/step01_prepare_matrix"
 STEP02_DIR="${REF_ROOT}/step02_build_reference_cluster"
+STEP02B_DIR="${REF_ROOT}/step02b_reference_context"
 STEP01_QUERY_DIR="${QUERY_ROOT}/step01_prepare_matrix"
 STEP03_DIR="${QUERY_ROOT}/step03_pairwise_matching"
 STEP04_DIR="${QUERY_ROOT}/step04_diagnose_low_ibs"
 STEP05_DIR="${WORK_ROOT}/step05_cluster_rescue_and_summary"
 TMP_DIR="${WORK_ROOT}/tmp"
 
-mkdir -p "$STEP01_REF_DIR" "$STEP02_DIR" "$STEP01_QUERY_DIR" "$STEP03_DIR" "$STEP04_DIR" "$STEP05_DIR" "$TMP_DIR"
+mkdir -p "$STEP01_REF_DIR" "$STEP02_DIR" "$STEP02B_DIR" "$STEP01_QUERY_DIR" "$STEP03_DIR" "$STEP04_DIR" "$STEP05_DIR" "$TMP_DIR"
 
 run_step00_with_temp_config() {
   local temp_config="$1"
@@ -175,6 +176,15 @@ if [[ "$PAIRED_MODE" == true ]]; then
     --zmin "$IBS_ZMIN" \
     --zmax "$IBS_ZMAX"
 
+  "$RSCRIPT_BIN" "${SCRIPT_DIR}/step02b_build_reference_context.R" \
+    --matrix "${STEP01_REF_DIR}/${REFERENCE_PREFIX}_ibs_matrix.tsv" \
+    --map "$MAP_FILE" \
+    --outdir "$STEP02B_DIR" \
+    --prefix "$REFERENCE_PREFIX" \
+    --anchor-col "$ANCHOR_COL" \
+    --secondary-col "$SECONDARY_COL" \
+    --threshold "$DNA_THRESHOLD"
+
   "$RSCRIPT_BIN" "${SCRIPT_DIR}/step01_prepare_matrix.R" \
     --mibs "$QUERY_IBS_FILE" \
     --id "$QUERY_IBS_ID_FILE" \
@@ -208,6 +218,7 @@ if [[ "$PAIRED_MODE" == true ]]; then
     --matrix "${STEP01_QUERY_DIR}/${QUERY_PREFIX}_ibs_matrix.tsv" \
     --map "$MAP_FILE" \
     --cluster-table "${STEP02_DIR}/${REFERENCE_PREFIX}_cluster_table.tsv" \
+    --reference-context "${STEP02B_DIR}/${REFERENCE_PREFIX}_reference_context.tsv" \
     --pairwise-dir "$STEP03_DIR" \
     --outdir "$STEP05_DIR" \
     --prefix "$PREFIX" \
@@ -235,6 +246,15 @@ else
     --zmin "$IBS_ZMIN" \
     --zmax "$IBS_ZMAX"
 
+  "$RSCRIPT_BIN" "${SCRIPT_DIR}/step02b_build_reference_context.R" \
+    --matrix "${WORK_ROOT}/step01_prepare_matrix/${PREFIX}_ibs_matrix.tsv" \
+    --map "$MAP_FILE" \
+    --outdir "${WORK_ROOT}/step02b_reference_context" \
+    --prefix "$PREFIX" \
+    --anchor-col "$ANCHOR_COL" \
+    --secondary-col "$SECONDARY_COL" \
+    --threshold "$DNA_THRESHOLD"
+
   "$RSCRIPT_BIN" "${SCRIPT_DIR}/step03_pairwise_matching.R" \
     --matrix "${WORK_ROOT}/step01_prepare_matrix/${PREFIX}_ibs_matrix.tsv" \
     --map "$MAP_FILE" \
@@ -261,6 +281,7 @@ else
     --matrix "${WORK_ROOT}/step01_prepare_matrix/${PREFIX}_ibs_matrix.tsv" \
     --map "$MAP_FILE" \
     --cluster-table "${WORK_ROOT}/step02_build_reference_cluster/${PREFIX}_cluster_table.tsv" \
+    --reference-context "${WORK_ROOT}/step02b_reference_context/${PREFIX}_reference_context.tsv" \
     --pairwise-dir "${WORK_ROOT}/step03_pairwise_matching" \
     --outdir "${WORK_ROOT}/step05_cluster_rescue_and_summary" \
     --prefix "$PREFIX" \

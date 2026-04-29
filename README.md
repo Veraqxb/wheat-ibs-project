@@ -29,6 +29,7 @@ The repository now includes a modular IBS matching workflow with two entry modes
 
 Main entry:
 
+- `bin/camp-ibs`
 - `scripts/wheat_ibs_modular_pipeline.sh`
 - `scripts/plot_group_heatmaps.R`
 
@@ -42,6 +43,7 @@ Steps:
 - `scripts/step00_vcf_to_ibs.sh`
 - `scripts/step01_prepare_matrix.R`
 - `scripts/step02_build_reference_cluster.R`
+- `scripts/step02b_build_reference_context.R`
 - `scripts/step03_pairwise_matching.R`
 - `scripts/step04_diagnose_low_ibs.R`
 - `scripts/step05_cluster_rescue_and_summary.R`
@@ -60,9 +62,11 @@ Core design:
 - Anchor-group clusters are defined by `IBS >= 0.99`
 - The same-ploidy `2group` dataset can be used as the reference cluster library for the downstream `5group` dataset
 - In `2group` reference mode, both `Z23` and `B25` clusters are built, their row-wise overlap is exported, and the combined cluster table is used for downstream rescue
+- The `2group` reference also exports a row-wise bidirectional Z23/B25 match context table, so downstream RNA rescue can know whether the corresponding B25 reference is trusted, review-only, or excluded
 - Every downstream group is matched against the anchor in map order
 - Sample names are matched by exact string equality only; no fuzzy ID rescue is used when reading the map against `.mibs.id`
 - RNA groups use Z23-first matching and B25 as rescue
+- B25 rescue never silently overrides Z23. If the 2group reference context is `True_mismatch` or `No_data`, B25 rescue is written as `REVIEW_B25_CONTEXT_RISK` instead of an automatic rescued sample.
 - Low-IBS / swapped samples are checked against anchor high-similarity clusters
 - `DETECTION_MODE=simple` can be used to disable B25 direct rescue and scan later groups only against the first-column cluster reference
 - RNA scan summaries include the within-group top 1% IBS background value and its difference from the 0.90 threshold, written to `*_threshold_check.log`
@@ -82,11 +86,38 @@ So in practice you only need to run three config files, one per ploidy.
 
 Recommended usage:
 
+Packaged command-line wrapper from existing `.mibs/.mibs.id` files:
+
+```bash
+wheat_ibs_project/bin/camp-ibs \
+  --mode ibs \
+  --work-root results/C2_packaged \
+  --prefix C2_packaged \
+  --map maps/c2_id_map.txt \
+  --reference-mibs ibs_file/C2_2groups_renamed.mibs \
+  --reference-id ibs_file/C2_2groups_renamed.mibs.id \
+  --query-mibs ibs_file/C2_5groups.final_qc.mibs \
+  --query-id ibs_file/C2_5groups.final_qc.mibs.id \
+  --anchor-col Z23 \
+  --secondary-col B25 \
+  --rna-groups "TC SC FC"
+```
+
+Use `--dry-run` to write the generated config without executing the pipeline.
+
+Config-file mode:
+
 ```bash
 bash scripts/wheat_ibs_modular_pipeline.sh configs/C2_modular.config.sh
 bash scripts/wheat_ibs_modular_pipeline.sh configs/C4_modular.config.sh
 bash scripts/wheat_ibs_modular_pipeline.sh configs/C6_modular.config.sh
 ```
+
+Packaging design:
+
+- `docs/package_design.md`
+- `examples/example_ibs_paired.sh`
+- `examples/example_vcf_paired.sh`
 
 Focused 2group reference QC:
 

@@ -194,14 +194,26 @@ draw_heatmap <- function(sub_mat, file, title, zlim = c(0.7, 1.0), show_values =
 
   nx <- ncol(sub_mat)
   ny <- nrow(sub_mat)
-  pdf(file, width = max(8, nx * 0.45 + 3), height = max(8, ny * 0.45 + 3))
-  par(mar = c(12, 12, 4, 2))
+  nmax <- max(nx, ny)
+  plot_width <- max(8, min(72, nx * 0.22 + 4))
+  plot_height <- max(8, min(72, ny * 0.22 + 4))
+  axis_cex <- if (nmax <= 80) {
+    0.55
+  } else if (nmax <= 220) {
+    0.32
+  } else if (nmax <= 650) {
+    0.18
+  } else {
+    0.12
+  }
+  pdf(file, width = plot_width, height = plot_height)
+  par(mar = c(14, 14, 4, 2))
   image_mat <- t(sub_mat)[, ny:1, drop = FALSE]
   image_fill <- image_mat
   image_fill[is.na(image_fill)] <- zlim[1]
   image(seq_len(nx), seq_len(ny), image_fill, col = cols, axes = FALSE, zlim = zlim, main = title, xlab = "", ylab = "")
-  axis(1, at = seq_len(nx), labels = colnames(sub_mat), las = 2, cex.axis = 0.7)
-  axis(2, at = seq_len(ny), labels = rev(rownames(sub_mat)), las = 1, cex.axis = 0.7)
+  axis(1, at = seq_len(nx), labels = colnames(sub_mat), las = 2, cex.axis = axis_cex)
+  axis(2, at = seq_len(ny), labels = rev(rownames(sub_mat)), las = 1, cex.axis = axis_cex)
   abline(h = seq(0.5, ny + 0.5, by = 1), col = "grey80")
   abline(v = seq(0.5, nx + 0.5, by = 1), col = "grey80")
   na_idx <- which(is.na(image_mat), arr.ind = TRUE)
@@ -216,7 +228,7 @@ draw_heatmap <- function(sub_mat, file, title, zlim = c(0.7, 1.0), show_values =
     )
   }
   box(col = "grey50")
-  if (show_values) {
+  if (show_values && nmax <= 120) {
     for (i in seq_len(nx)) {
       for (j in seq_len(ny)) {
         val <- sub_mat[j, i]
@@ -250,7 +262,7 @@ draw_density_plot <- function(internal_vals, pair_vals, out_file, title, interna
     print(
       ggplot(df, aes(x = IBS, color = Category, fill = Category)) +
         geom_density(alpha = 0.18, linewidth = 1.15, adjust = 1.1) +
-        geom_vline(xintercept = threshold_lines, linetype = "dashed", color = c("#4D4D4D", "#7F7F7F"), linewidth = 0.7) +
+        geom_vline(xintercept = threshold_lines, linetype = "dashed", color = "#4D4D4D", linewidth = 0.7) +
         scale_color_manual(values = cols) +
         scale_fill_manual(values = cols) +
         labs(title = title, x = "IBS", y = "Density") +
@@ -285,7 +297,7 @@ draw_group_density_collection <- function(collection_df, out_file, title, thresh
     print(
       ggplot(collection_df, aes(x = IBS, color = Category, fill = Category)) +
         geom_density(alpha = 0.18, linewidth = 1.0, adjust = 1.1) +
-        geom_vline(xintercept = threshold_lines, linetype = "dashed", color = c("#4D4D4D", "#7F7F7F"), linewidth = 0.6) +
+        geom_vline(xintercept = threshold_lines, linetype = "dashed", color = "#4D4D4D", linewidth = 0.6) +
         facet_wrap(~group_name, ncol = 1, scales = "free_y") +
         scale_color_manual(values = cols) +
         scale_fill_manual(values = cols) +
@@ -323,6 +335,7 @@ draw_category_barplot <- function(summary_df, out_file, title, group_col = "grou
     "MATCH_Z23" = "#009E73",
     "RESCUED_B25" = "#E69F00",
     "RESCUED_CLUSTER" = "#56B4E9",
+    "REVIEW_B25_CONTEXT_RISK" = "#E69F00",
     "SWAPPED" = "#D55E00",
     "LOW_IBS" = "#CC79A7",
     "DROP" = "#999999",

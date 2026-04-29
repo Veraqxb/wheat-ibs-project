@@ -8,7 +8,10 @@ suppressPackageStartupMessages({
 
 script_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)[1]
 if (is.na(script_arg)) stop("Cannot determine script path for two_group_ibs_density_thresholds.R")
-script_dirname <- dirname(normalizePath(sub("^--file=", "", script_arg)))
+script_path <- sub("^--file=", "", script_arg)
+# Rscript can encode spaces in --file paths as "~+~" on some systems.
+script_path <- gsub("~\\+~", " ", script_path, fixed = FALSE)
+script_dirname <- dirname(normalizePath(script_path))
 source(file.path(script_dirname, "ibs_common.R"))
 
 opt <- parse_args(commandArgs(trailingOnly = TRUE))
@@ -21,6 +24,8 @@ anchor_col <- opt[["anchor-col"]] %||% "Z23"
 secondary_col <- opt[["secondary-col"]] %||% "B25"
 xmin <- as.numeric(opt[["xmin"]] %||% "0.70")
 xmax <- as.numeric(opt[["xmax"]] %||% "1.00")
+background_sample_n <- as.integer(opt[["background-sample"]] %||% "100000")
+random_seed <- as.integer(opt[["seed"]] %||% "1")
 
 dir.create(opt[["outdir"]], recursive = TRUE, showWarnings = FALSE)
 
@@ -61,6 +66,39 @@ extract_between_values <- function(mat, row_ids, col_ids, label) {
   vals <- as.vector(mat[row_ids, col_ids, drop = FALSE])
   vals <- vals[!is.na(vals)]
   data.table(type = label, ibs = vals)
+}
+
+extract_random_non_expected_between_values <- function(mat, row_ids, col_ids, expected_dt, label, max_n = 100000, seed = 1) {
+  row_ids <- unique(standardize_id(row_ids))
+  col_ids <- unique(standardize_id(col_ids))
+  row_ids <- row_ids[!is.na(row_ids) & row_ids %in% rownames(mat)]
+  col_ids <- col_ids[!is.na(col_ids) & col_ids %in% colnames(mat)]
+
+  if (length(row_ids) == 0 || length(col_ids) == 0) {
+    return(data.table(type = character(), ibs = numeric(), expected_anchor = character(), expected_secondary = character()))
+  }
+
+  pair_grid <- CJ(expected_secondary = row_ids, expected_anchor = col_ids, unique = TRUE)
+  expected_pairs <- unique(expected_dt[!is.na(expected_anchor) & !is.na(expected_secondary), .(expected_secondary, expected_anchor)])
+  if (nrow(expected_pairs) > 0) {
+    pair_grid <- pair_grid[!expected_pairs, on = .(expected_secondary, expected_anchor)]
+  }
+
+  if (nrow(pair_grid) == 0) {
+    return(data.table(type = character(), ibs = numeric(), expected_anchor = character(), expected_secondary = character()))
+  }
+
+  if (!is.na(max_n) && max_n > 0 && nrow(pair_grid) > max_n) {
+    set.seed(seed)
+    pair_grid <- pair_grid[sample.int(.N, max_n)]
+  }
+
+  pair_grid[, ibs := mapply(function(b, a) {
+    as.numeric(mat[b, a])
+  }, expected_secondary, expected_anchor)]
+  pair_grid <- pair_grid[!is.na(ibs)]
+  pair_grid[, type := label]
+  pair_grid[, .(type, ibs, expected_anchor, expected_secondary)]
 }
 
 extract_expected_pairs <- function(mat, map_df, anchor_col, secondary_col) {
@@ -163,7 +201,8 @@ type_cols <- c(
   "Anchor_within" = "#4E79A7",
   "Secondary_within" = "#59A14F",
   "Between_all" = "#E15759",
-  "Expected_pair" = "#F28E2B"
+  "Expected_pair" = "#F28E2B",
+  "Random_non_pair" = "#6A3D9A"
 )
 
 line_cols <- c(
@@ -177,6 +216,31 @@ line_types <- c(
   "Background_q99" = "dotdash",
   "Strict_0.99" = "dashed"
 )
+
+expected_random_line_cols <- c(
+  "Fixed_0.90" = "black",
+  "Random_non_pair_q99" = "#6A3D9A",
+  "Strict_0.99" = "#B2182B"
+)
+
+expected_random_line_types <- c(
+  "Fixed_0.90" = "dashed",
+  "Random_non_pair_q99" = "dotdash",
+  "Strict_0.99" = "dashed"
+)
+
+theme_density_pub <- function(base_size = 13) {
+  theme_classic(base_size = base_size) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(hjust = 0.5, color = "grey30"),
+      axis.title = element_text(face = "bold"),
+      legend.title = element_text(face = "bold"),
+      legend.position = "right",
+      axis.line = element_line(linewidth = 0.5),
+      axis.ticks = element_line(linewidth = 0.5)
+    )
+}
 
 msg("Reading files...")
 mat <- read_mibs_matrix(opt[["mibs"]], opt[["id"]])
@@ -195,15 +259,35 @@ between_all <- extract_between_values(mat, secondary_ids, anchor_ids, "Between_a
 
 expected_dt <- extract_expected_pairs(mat, map_df, anchor_col, secondary_col)
 expected_dist <- expected_dt[!is.na(ibs), .(type = "Expected_pair", ibs)]
+random_non_pair <- extract_random_non_expected_between_values(
+  mat = mat,
+  row_ids = secondary_ids,
+  col_ids = anchor_ids,
+  expected_dt = expected_dt,
+  label = "Random_non_pair",
+  max_n = background_sample_n,
+  seed = random_seed
+)
 
-plot_dt <- rbindlist(list(anchor_within, secondary_within, between_all, expected_dist), fill = TRUE)
+plot_dt <- rbindlist(list(anchor_within, secondary_within, between_all, expected_dist, random_non_pair[, .(type, ibs)]), fill = TRUE)
 plot_dt[, type := factor(type, levels = names(type_cols))]
+
+expected_vs_random_dt <- rbindlist(list(
+  expected_dist,
+  random_non_pair[, .(type, ibs)]
+), fill = TRUE)
+expected_vs_random_dt[, type := factor(type, levels = c("Expected_pair", "Random_non_pair"))]
 
 fwrite(plot_dt, file.path(opt[["outdir"]], paste0(prefix, "_ibs_density_input_values.tsv")), sep = "\t")
 fwrite(expected_dt, file.path(opt[["outdir"]], paste0(prefix, "_expected_pair_ibs.tsv")), sep = "\t")
+fwrite(random_non_pair, file.path(opt[["outdir"]], paste0(prefix, "_random_non_expected_pair_ibs.tsv")), sep = "\t")
+fwrite(expected_vs_random_dt, file.path(opt[["outdir"]], paste0(prefix, "_expected_vs_random_density_input.tsv")), sep = "\t")
 
 summary_dt <- make_summary(plot_dt)
 fwrite(summary_dt, file.path(opt[["outdir"]], paste0(prefix, "_ibs_density_summary.tsv")), sep = "\t")
+
+expected_random_summary_dt <- make_summary(expected_vs_random_dt)
+fwrite(expected_random_summary_dt, file.path(opt[["outdir"]], paste0(prefix, "_expected_vs_random_summary.tsv")), sep = "\t")
 
 threshold_dt <- make_threshold_recommendation(
   expected_vals = expected_dist$ibs,
@@ -216,6 +300,8 @@ fwrite(threshold_dt, file.path(opt[["outdir"]], paste0(prefix, "_ibs_threshold_r
 bg_q99 <- threshold_dt[metric == "between_bg_q99", value]
 loose_thr <- threshold_dt[metric == "suggested_loose_lower", value]
 strict_thr <- threshold_dt[metric == "suggested_strict_lower", value]
+random_non_pair_q99 <- expected_random_summary_dt[type == "Random_non_pair", q99]
+if (length(random_non_pair_q99) == 0 || !is.finite(random_non_pair_q99)) random_non_pair_q99 <- NA_real_
 
 line_dt <- data.table(
   x = c(0.90, bg_q99, 0.99),
@@ -236,7 +322,7 @@ p1 <- ggplot(plot_dt, aes(x = ibs, color = type, fill = type)) +
   scale_fill_manual(values = type_cols) +
   scale_linetype_manual(values = line_types) +
   coord_cartesian(xlim = c(xmin, xmax)) +
-  theme_classic(base_size = 13) +
+  theme_density_pub(base_size = 13) +
   labs(
     x = "IBS",
     y = "Density",
@@ -250,6 +336,107 @@ p1 <- ggplot(plot_dt, aes(x = ibs, color = type, fill = type)) +
 ggsave(file.path(opt[["outdir"]], paste0(prefix, "_ibs_density_distributions.pdf")), p1, width = 9.5, height = 5.8)
 ggsave(file.path(opt[["outdir"]], paste0(prefix, "_ibs_density_distributions.png")), p1, width = 9.5, height = 5.8, dpi = 300)
 
+expected_random_cols <- c(
+  "Expected_pair" = "#F28E2B",
+  "Random_non_pair" = "#6A3D9A"
+)
+
+if (nrow(expected_vs_random_dt) > 0) {
+  expected_random_line_dt <- data.table(
+    x = c(0.90, random_non_pair_q99, 0.99),
+    line_type = factor(
+      c("Fixed_0.90", "Random_non_pair_q99", "Strict_0.99"),
+      levels = names(expected_random_line_cols)
+    ),
+    label = c("0.90", paste0("Random non-pair q99 = ", sprintf("%.4f", random_non_pair_q99)), "0.99")
+  )
+  expected_random_line_dt <- expected_random_line_dt[!is.na(x)]
+
+  p1b <- ggplot(expected_vs_random_dt, aes(x = ibs, color = type, fill = type)) +
+    geom_density(alpha = 0.14, linewidth = 1.15, na.rm = TRUE) +
+    geom_vline(
+      data = expected_random_line_dt,
+      aes(xintercept = x, linetype = line_type, color = line_type),
+      linewidth = 0.7,
+      show.legend = TRUE
+    ) +
+    scale_color_manual(
+      values = c(expected_random_cols, expected_random_line_cols),
+      breaks = c(names(expected_random_cols), names(expected_random_line_cols)),
+      drop = FALSE
+    ) +
+    scale_fill_manual(values = expected_random_cols, drop = FALSE) +
+    scale_linetype_manual(values = expected_random_line_types, drop = FALSE) +
+    coord_cartesian(xlim = c(xmin, xmax)) +
+    theme_density_pub(base_size = 13) +
+    labs(
+      x = "IBS",
+      y = "Density",
+      color = "Distribution / Threshold",
+      fill = "Distribution",
+      linetype = "Threshold",
+      title = paste0(prefix, " expected one-to-one vs random non-pair IBS"),
+      subtitle = paste0(
+        "Random non-pair q99 = ", sprintf("%.4f", random_non_pair_q99),
+        "; hard threshold = 0.99"
+      )
+    )
+
+  ggsave(file.path(opt[["outdir"]], paste0(prefix, "_expected_vs_random_non_pair_density.pdf")), p1b, width = 9.5, height = 5.8)
+  ggsave(file.path(opt[["outdir"]], paste0(prefix, "_expected_vs_random_non_pair_density.png")), p1b, width = 9.5, height = 5.8, dpi = 300)
+
+  p1c <- ggplot(expected_vs_random_dt, aes(x = type, y = ibs, fill = type)) +
+    geom_boxplot(width = 0.58, outlier.size = 0.45, linewidth = 0.55, na.rm = TRUE) +
+    geom_hline(yintercept = 0.90, linetype = "dashed", linewidth = 0.55, color = "black") +
+    geom_hline(yintercept = random_non_pair_q99, linetype = "dotdash", linewidth = 0.7, color = "#6A3D9A") +
+    geom_hline(yintercept = 0.99, linetype = "dashed", linewidth = 0.55, color = "#B2182B") +
+    scale_fill_manual(values = expected_random_cols, drop = FALSE) +
+    coord_cartesian(ylim = c(xmin, xmax)) +
+    theme_density_pub(base_size = 13) +
+    theme(
+      legend.position = "none",
+      axis.text.x = element_text(angle = 0, hjust = 0.5)
+    ) +
+    labs(
+      x = "",
+      y = "IBS",
+      fill = "Distribution",
+      title = paste0(prefix, " expected one-to-one vs random non-pair boxplot"),
+      subtitle = paste0("Purple dotdash: random non-pair q99 = ", sprintf("%.4f", random_non_pair_q99))
+    )
+
+  ggsave(file.path(opt[["outdir"]], paste0(prefix, "_expected_vs_random_non_pair_boxplot.pdf")), p1c, width = 7.4, height = 5.4)
+  ggsave(file.path(opt[["outdir"]], paste0(prefix, "_expected_vs_random_non_pair_boxplot.png")), p1c, width = 7.4, height = 5.4, dpi = 300)
+
+  p1d <- ggplot(expected_vs_random_dt, aes(x = ibs, color = type)) +
+    stat_ecdf(linewidth = 1.15, na.rm = TRUE) +
+    geom_vline(
+      data = expected_random_line_dt,
+      aes(xintercept = x, linetype = line_type, color = line_type),
+      linewidth = 0.7,
+      show.legend = TRUE
+    ) +
+    scale_color_manual(
+      values = c(expected_random_cols, expected_random_line_cols),
+      breaks = c(names(expected_random_cols), names(expected_random_line_cols)),
+      drop = FALSE
+    ) +
+    scale_linetype_manual(values = expected_random_line_types, drop = FALSE) +
+    coord_cartesian(xlim = c(xmin, xmax)) +
+    theme_density_pub(base_size = 13) +
+    labs(
+      x = "IBS",
+      y = "Cumulative proportion",
+      color = "Distribution / Threshold",
+      linetype = "Threshold",
+      title = paste0(prefix, " expected one-to-one vs random non-pair ECDF"),
+      subtitle = paste0("Random non-pair q99 = ", sprintf("%.4f", random_non_pair_q99), "; hard threshold = 0.99")
+    )
+
+  ggsave(file.path(opt[["outdir"]], paste0(prefix, "_expected_vs_random_non_pair_ecdf.pdf")), p1d, width = 9.5, height = 5.8)
+  ggsave(file.path(opt[["outdir"]], paste0(prefix, "_expected_vs_random_non_pair_ecdf.png")), p1d, width = 9.5, height = 5.8, dpi = 300)
+}
+
 p2 <- ggplot(plot_dt, aes(x = ibs, color = type)) +
   stat_ecdf(linewidth = 1, na.rm = TRUE) +
   geom_vline(
@@ -261,7 +448,7 @@ p2 <- ggplot(plot_dt, aes(x = ibs, color = type)) +
   scale_color_manual(values = c(type_cols, line_cols), breaks = c(names(type_cols), names(line_cols))) +
   scale_linetype_manual(values = line_types) +
   coord_cartesian(xlim = c(xmin, xmax)) +
-  theme_classic(base_size = 13) +
+  theme_density_pub(base_size = 13) +
   labs(
     x = "IBS",
     y = "Cumulative proportion",
@@ -281,7 +468,7 @@ p3 <- ggplot(plot_dt, aes(x = type, y = ibs, fill = type)) +
   geom_hline(yintercept = 0.99, linetype = "dashed", linewidth = 0.6, color = "#B2182B") +
   scale_fill_manual(values = type_cols) +
   coord_cartesian(ylim = c(xmin, xmax)) +
-  theme_classic(base_size = 13) +
+  theme_density_pub(base_size = 13) +
   labs(
     x = "",
     y = "IBS",
@@ -305,7 +492,7 @@ if (nrow(self_scatter_dt) > 0) {
     geom_abline(slope = 1, intercept = 0, linetype = "dashed", linewidth = 0.8, color = "#7F7F7F") +
     geom_point(size = 2.6, alpha = 0.85, color = "#4E79A7") +
     coord_cartesian(xlim = c(xmin, xmax), ylim = c(xmin, xmax)) +
-    theme_classic(base_size = 13) +
+  theme_density_pub(base_size = 13) +
     labs(
       x = paste0(anchor_col, " self IBS"),
       y = paste0(secondary_col, " self IBS"),
@@ -336,7 +523,7 @@ if (nrow(pair_scatter_dt) > 0) {
     geom_hline(yintercept = 0.99, linetype = "dashed", linewidth = 0.6, color = "#B2182B") +
     scale_color_manual(values = pair_cols, drop = FALSE) +
     coord_cartesian(ylim = c(xmin, xmax)) +
-    theme_classic(base_size = 13) +
+    theme_density_pub(base_size = 13) +
     labs(
       x = "Expected pair order",
       y = "Expected pair IBS",

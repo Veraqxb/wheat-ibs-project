@@ -1,0 +1,264 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+usage() {
+  cat <<'EOF'
+camp-ibs: CAMP IBS sample identity pipeline wrapper
+
+Usage:
+  camp-ibs --mode ibs --work-root OUT --prefix NAME --map MAP.tsv \
+    --reference-mibs REF.mibs --reference-id REF.mibs.id \
+    --query-mibs QUERY.mibs --query-id QUERY.mibs.id
+
+  camp-ibs --mode vcf --work-root OUT --prefix NAME --map MAP.tsv \
+    --project-root /path/to/tools \
+    --reference-vcf-dir REF_VCF_DIR --query-vcf-dir QUERY_VCF_DIR \
+    --bcftools /path/bcftools --bgzip /path/bgzip --tabix /path/tabix \
+    --plink /path/plink --parallel /path/parallel
+
+Required common arguments:
+  --mode ibs|vcf
+  --work-root PATH
+  --prefix NAME
+  --map PATH
+
+Common optional arguments:
+  --anchor-col Z23
+  --secondary-col B25
+  --rna-groups "TC SC FC"
+  --detection-mode full|simple
+  --dna-threshold 0.99
+  --rna-threshold 0.90
+  --zmin 0.7
+  --zmax 1.0
+  --rscript Rscript
+  --dry-run              Write config only; do not run pipeline.
+
+IBS paired mode:
+  --reference-mibs PATH
+  --reference-id PATH
+  --query-mibs PATH
+  --query-id PATH
+
+IBS single mode:
+  --mibs PATH
+  --id PATH
+
+VCF paired mode:
+  --reference-vcf-dir PATH
+  --query-vcf-dir PATH
+  --project-root PATH
+  --bcftools PATH
+  --bgzip PATH
+  --tabix PATH
+  --plink PATH
+  --parallel PATH
+
+VCF optional:
+  --reference-max-geno 0.3
+  --query-max-geno 0.4
+  --threads 8
+  --chr-set 42
+  --chr-list "005 006 ..."
+  --min-mac 2
+  --high-het-threshold 0.05
+  --copy-mode link|copy
+EOF
+}
+
+die() {
+  echo "camp-ibs error: $*" >&2
+  exit 1
+}
+
+quote_sh() {
+  printf "%q" "$1"
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PIPELINE="${PROJECT_DIR}/scripts/wheat_ibs_modular_pipeline.sh"
+[[ -f "$PIPELINE" ]] || die "Cannot find pipeline script: $PIPELINE"
+
+MODE=""
+WORK_ROOT=""
+PREFIX=""
+MAP_FILE=""
+ANCHOR_COL="Z23"
+SECONDARY_COL="B25"
+RNA_GROUPS="TC SC FC"
+DETECTION_MODE="full"
+DNA_THRESHOLD="0.99"
+RNA_THRESHOLD="0.90"
+IBS_ZMIN="0.7"
+IBS_ZMAX="1.0"
+RSCRIPT_BIN="Rscript"
+DRY_RUN="false"
+
+MIBS_FILE=""
+IBS_ID_FILE=""
+REFERENCE_IBS_FILE=""
+REFERENCE_IBS_ID_FILE=""
+QUERY_IBS_FILE=""
+QUERY_IBS_ID_FILE=""
+
+PROJECT_ROOT=""
+REFERENCE_VCF_SOURCE_DIR=""
+QUERY_VCF_SOURCE_DIR=""
+BCFTOOLS_BIN=""
+BGZIP_BIN=""
+TABIX_BIN=""
+PLINK_BIN=""
+PARALLEL_BIN=""
+REFERENCE_MAX_GENO="0.3"
+QUERY_MAX_GENO="0.4"
+THREADS_PARALLEL="8"
+CHR_SET="42"
+CHR_LIST=""
+MIN_MAC="2"
+HIGH_HET_THRESHOLD="0.05"
+COPY_MODE="link"
+
+REFERENCE_PREFIX=""
+QUERY_PREFIX=""
+REFERENCE_ALL_GROUPS="Z23 B25"
+QUERY_ALL_GROUPS=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --mode) MODE="$2"; shift 2 ;;
+    --work-root) WORK_ROOT="$2"; shift 2 ;;
+    --prefix) PREFIX="$2"; shift 2 ;;
+    --map) MAP_FILE="$2"; shift 2 ;;
+    --anchor-col) ANCHOR_COL="$2"; shift 2 ;;
+    --secondary-col) SECONDARY_COL="$2"; shift 2 ;;
+    --rna-groups) RNA_GROUPS="$2"; shift 2 ;;
+    --detection-mode) DETECTION_MODE="$2"; shift 2 ;;
+    --dna-threshold) DNA_THRESHOLD="$2"; shift 2 ;;
+    --rna-threshold) RNA_THRESHOLD="$2"; shift 2 ;;
+    --zmin) IBS_ZMIN="$2"; shift 2 ;;
+    --zmax) IBS_ZMAX="$2"; shift 2 ;;
+    --rscript) RSCRIPT_BIN="$2"; shift 2 ;;
+    --dry-run) DRY_RUN="true"; shift ;;
+    --mibs) MIBS_FILE="$2"; shift 2 ;;
+    --id) IBS_ID_FILE="$2"; shift 2 ;;
+    --reference-mibs) REFERENCE_IBS_FILE="$2"; shift 2 ;;
+    --reference-id) REFERENCE_IBS_ID_FILE="$2"; shift 2 ;;
+    --query-mibs) QUERY_IBS_FILE="$2"; shift 2 ;;
+    --query-id) QUERY_IBS_ID_FILE="$2"; shift 2 ;;
+    --project-root) PROJECT_ROOT="$2"; shift 2 ;;
+    --reference-vcf-dir) REFERENCE_VCF_SOURCE_DIR="$2"; shift 2 ;;
+    --query-vcf-dir) QUERY_VCF_SOURCE_DIR="$2"; shift 2 ;;
+    --bcftools) BCFTOOLS_BIN="$2"; shift 2 ;;
+    --bgzip) BGZIP_BIN="$2"; shift 2 ;;
+    --tabix) TABIX_BIN="$2"; shift 2 ;;
+    --plink) PLINK_BIN="$2"; shift 2 ;;
+    --parallel) PARALLEL_BIN="$2"; shift 2 ;;
+    --reference-max-geno) REFERENCE_MAX_GENO="$2"; shift 2 ;;
+    --query-max-geno) QUERY_MAX_GENO="$2"; shift 2 ;;
+    --threads) THREADS_PARALLEL="$2"; shift 2 ;;
+    --chr-set) CHR_SET="$2"; shift 2 ;;
+    --chr-list) CHR_LIST="$2"; shift 2 ;;
+    --min-mac) MIN_MAC="$2"; shift 2 ;;
+    --high-het-threshold) HIGH_HET_THRESHOLD="$2"; shift 2 ;;
+    --copy-mode) COPY_MODE="$2"; shift 2 ;;
+    --reference-prefix) REFERENCE_PREFIX="$2"; shift 2 ;;
+    --query-prefix) QUERY_PREFIX="$2"; shift 2 ;;
+    --reference-groups) REFERENCE_ALL_GROUPS="$2"; shift 2 ;;
+    --query-groups) QUERY_ALL_GROUPS="$2"; shift 2 ;;
+    *) die "Unknown argument: $1" ;;
+  esac
+done
+
+[[ -n "$MODE" ]] || die "--mode is required"
+[[ "$MODE" == "ibs" || "$MODE" == "vcf" ]] || die "--mode must be ibs or vcf"
+[[ -n "$WORK_ROOT" ]] || die "--work-root is required"
+[[ -n "$PREFIX" ]] || die "--prefix is required"
+[[ -n "$MAP_FILE" ]] || die "--map is required"
+[[ -f "$MAP_FILE" ]] || die "Map file not found: $MAP_FILE"
+
+REFERENCE_PREFIX="${REFERENCE_PREFIX:-${PREFIX}_2group_reference}"
+QUERY_PREFIX="${QUERY_PREFIX:-${PREFIX}_5group_query}"
+QUERY_ALL_GROUPS="${QUERY_ALL_GROUPS:-Z23 B25 ${RNA_GROUPS}}"
+
+if [[ "$MODE" == "ibs" ]]; then
+  if [[ -n "$REFERENCE_IBS_FILE" || -n "$QUERY_IBS_FILE" ]]; then
+    [[ -f "$REFERENCE_IBS_FILE" ]] || die "Reference mibs not found: $REFERENCE_IBS_FILE"
+    [[ -f "$REFERENCE_IBS_ID_FILE" ]] || die "Reference id not found: $REFERENCE_IBS_ID_FILE"
+    [[ -f "$QUERY_IBS_FILE" ]] || die "Query mibs not found: $QUERY_IBS_FILE"
+    [[ -f "$QUERY_IBS_ID_FILE" ]] || die "Query id not found: $QUERY_IBS_ID_FILE"
+  else
+    [[ -f "$MIBS_FILE" ]] || die "Mibs not found: $MIBS_FILE"
+    [[ -f "$IBS_ID_FILE" ]] || die "ID file not found: $IBS_ID_FILE"
+  fi
+else
+  [[ -n "$PROJECT_ROOT" ]] || die "--project-root is required for vcf mode"
+  [[ -d "$REFERENCE_VCF_SOURCE_DIR" ]] || die "Reference VCF dir not found: $REFERENCE_VCF_SOURCE_DIR"
+  [[ -d "$QUERY_VCF_SOURCE_DIR" ]] || die "Query VCF dir not found: $QUERY_VCF_SOURCE_DIR"
+  [[ -x "$BCFTOOLS_BIN" || -f "$BCFTOOLS_BIN" ]] || die "bcftools not found: $BCFTOOLS_BIN"
+  [[ -x "$BGZIP_BIN" || -f "$BGZIP_BIN" ]] || die "bgzip not found: $BGZIP_BIN"
+  [[ -x "$TABIX_BIN" || -f "$TABIX_BIN" ]] || die "tabix not found: $TABIX_BIN"
+  [[ -x "$PLINK_BIN" || -f "$PLINK_BIN" ]] || die "plink not found: $PLINK_BIN"
+  [[ -x "$PARALLEL_BIN" || -f "$PARALLEL_BIN" ]] || die "parallel not found: $PARALLEL_BIN"
+fi
+
+mkdir -p "$WORK_ROOT"
+CONFIG_FILE="${WORK_ROOT}/${PREFIX}.camp_ibs.config.sh"
+
+{
+  echo "MODE=$(quote_sh "$MODE")"
+  echo "WORK_ROOT=$(quote_sh "$WORK_ROOT")"
+  echo "PREFIX=$(quote_sh "$PREFIX")"
+  echo "MAP_FILE=$(quote_sh "$MAP_FILE")"
+  echo "ANCHOR_COL=$(quote_sh "$ANCHOR_COL")"
+  echo "SECONDARY_COL=$(quote_sh "$SECONDARY_COL")"
+  echo "RNA_GROUPS=$(quote_sh "$RNA_GROUPS")"
+  echo "DETECTION_MODE=$(quote_sh "$DETECTION_MODE")"
+  echo "DNA_THRESHOLD=$DNA_THRESHOLD"
+  echo "RNA_THRESHOLD=$RNA_THRESHOLD"
+  echo "IBS_ZMIN=$IBS_ZMIN"
+  echo "IBS_ZMAX=$IBS_ZMAX"
+  echo "REFERENCE_PREFIX=$(quote_sh "$REFERENCE_PREFIX")"
+  echo "QUERY_PREFIX=$(quote_sh "$QUERY_PREFIX")"
+  echo "REFERENCE_ALL_GROUPS=$(quote_sh "$REFERENCE_ALL_GROUPS")"
+  echo "QUERY_ALL_GROUPS=$(quote_sh "$QUERY_ALL_GROUPS")"
+  echo "RSCRIPT_BIN=$(quote_sh "$RSCRIPT_BIN")"
+
+  if [[ "$MODE" == "ibs" ]]; then
+    if [[ -n "$REFERENCE_IBS_FILE" || -n "$QUERY_IBS_FILE" ]]; then
+      echo "REFERENCE_IBS_FILE=$(quote_sh "$REFERENCE_IBS_FILE")"
+      echo "REFERENCE_IBS_ID_FILE=$(quote_sh "$REFERENCE_IBS_ID_FILE")"
+      echo "QUERY_IBS_FILE=$(quote_sh "$QUERY_IBS_FILE")"
+      echo "QUERY_IBS_ID_FILE=$(quote_sh "$QUERY_IBS_ID_FILE")"
+    else
+      echo "IBS_FILE=$(quote_sh "$MIBS_FILE")"
+      echo "IBS_ID_FILE=$(quote_sh "$IBS_ID_FILE")"
+    fi
+  else
+    echo "PROJECT_ROOT=$(quote_sh "$PROJECT_ROOT")"
+    echo "REFERENCE_VCF_SOURCE_DIR=$(quote_sh "$REFERENCE_VCF_SOURCE_DIR")"
+    echo "QUERY_VCF_SOURCE_DIR=$(quote_sh "$QUERY_VCF_SOURCE_DIR")"
+    echo "BCFTOOLS_BIN=$(quote_sh "$BCFTOOLS_BIN")"
+    echo "BGZIP_BIN=$(quote_sh "$BGZIP_BIN")"
+    echo "TABIX_BIN=$(quote_sh "$TABIX_BIN")"
+    echo "PLINK_BIN=$(quote_sh "$PLINK_BIN")"
+    echo "PARALLEL_BIN=$(quote_sh "$PARALLEL_BIN")"
+    echo "REFERENCE_MAX_GENO=$REFERENCE_MAX_GENO"
+    echo "QUERY_MAX_GENO=$QUERY_MAX_GENO"
+    echo "THREADS_PARALLEL=$THREADS_PARALLEL"
+    echo "CHR_SET=$CHR_SET"
+    echo "CHR_LIST=$(quote_sh "$CHR_LIST")"
+    echo "MIN_MAC=$MIN_MAC"
+    echo "HIGH_HET_THRESHOLD=$HIGH_HET_THRESHOLD"
+    echo "COPY_MODE=$(quote_sh "$COPY_MODE")"
+  fi
+} > "$CONFIG_FILE"
+
+echo "Wrote config: $CONFIG_FILE"
+if [[ "$DRY_RUN" == "true" ]]; then
+  echo "Dry run requested; pipeline not executed."
+  exit 0
+fi
+
+bash "$PIPELINE" "$CONFIG_FILE"

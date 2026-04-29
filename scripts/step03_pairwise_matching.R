@@ -1,6 +1,9 @@
 #!/usr/bin/env Rscript
 
-source(file.path(dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)[1]))), "ibs_common.R"))
+script_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)[1]
+script_path <- if (length(script_arg) == 0 || is.na(script_arg)) getwd() else sub("^--file=", "", script_arg)
+script_path <- gsub("~\\+~", " ", script_path, fixed = FALSE)
+source(file.path(dirname(normalizePath(script_path)), "ibs_common.R"))
 
 opt <- parse_args(commandArgs(trailingOnly = TRUE))
 required <- c("matrix", "map", "outdir", "prefix")

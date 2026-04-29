@@ -1,0 +1,4 @@
+prefix	map	reference_mibs	reference_id	query_mibs	query_id
+C2	/path/to/maps/c2_id_map.txt	/path/to/ibs_file/C2_2groups_renamed.mibs	/path/to/ibs_file/C2_2groups_renamed.mibs.id	/path/to/ibs_file/C2_5groups.final_qc.mibs	/path/to/ibs_file/C2_5groups.final_qc.mibs.id
+C4	/path/to/maps/c4_id_map.txt	/path/to/ibs_file/C4_2groups_renamed.mibs	/path/to/ibs_file/C4_2groups_renamed.mibs.id	/path/to/ibs_file/C4_5group_final_qc.mibs	/path/to/ibs_file/C4_5group_final_qc.mibs.id
+C6	/path/to/maps/c6_id_map.txt	/path/to/ibs_file/C6_2groups_final_qc.mibs	/path/to/ibs_file/C6_2groups_final_qc.mibs.id	/path/to/ibs_file/C6_5group_final.mibs	/path/to/ibs_file/C6_5group_final.mibs.id

@@ -5,22 +5,30 @@ usage() {
   cat <<'EOF'
 camp-ibs: CAMP IBS sample identity pipeline wrapper
 
-Usage:
+Recommended batch usage:
+  camp-ibs run-manifest \
+    --manifest samples.tsv \
+    --work-root results \
+    --rscript Rscript
+
+Manifest columns for IBS paired mode:
+  prefix  map  reference_mibs  reference_id  query_mibs  query_id
+
+Optional manifest columns:
+  work_root  anchor_col  secondary_col  rna_groups
+  dna_threshold  rna_threshold  detection_mode  zmin  zmax
+
+Single-run IBS usage:
   camp-ibs --mode ibs --work-root OUT --prefix NAME --map MAP.tsv \
     --reference-mibs REF.mibs --reference-id REF.mibs.id \
     --query-mibs QUERY.mibs --query-id QUERY.mibs.id
 
+Single-run VCF usage:
   camp-ibs --mode vcf --work-root OUT --prefix NAME --map MAP.tsv \
     --project-root /path/to/tools \
     --reference-vcf-dir REF_VCF_DIR --query-vcf-dir QUERY_VCF_DIR \
     --bcftools /path/bcftools --bgzip /path/bgzip --tabix /path/tabix \
     --plink /path/plink --parallel /path/parallel
-
-Required common arguments:
-  --mode ibs|vcf
-  --work-root PATH
-  --prefix NAME
-  --map PATH
 
 Common optional arguments:
   --anchor-col Z23
@@ -32,37 +40,11 @@ Common optional arguments:
   --zmin 0.7
   --zmax 1.0
   --rscript Rscript
-  --dry-run              Write config only; do not run pipeline.
+  --dry-run
 
-IBS paired mode:
-  --reference-mibs PATH
-  --reference-id PATH
-  --query-mibs PATH
-  --query-id PATH
-
-IBS single mode:
-  --mibs PATH
-  --id PATH
-
-VCF paired mode:
-  --reference-vcf-dir PATH
-  --query-vcf-dir PATH
-  --project-root PATH
-  --bcftools PATH
-  --bgzip PATH
-  --tabix PATH
-  --plink PATH
-  --parallel PATH
-
-VCF optional:
-  --reference-max-geno 0.3
-  --query-max-geno 0.4
-  --threads 8
-  --chr-set 42
-  --chr-list "005 006 ..."
-  --min-mac 2
-  --high-het-threshold 0.05
-  --copy-mode link|copy
+Examples:
+  camp-ibs run-manifest --manifest examples/manifest_ibs.tsv --work-root results --dry-run
+  camp-ibs --help
 EOF
 }
 
@@ -80,185 +62,353 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PIPELINE="${PROJECT_DIR}/scripts/wheat_ibs_modular_pipeline.sh"
 [[ -f "$PIPELINE" ]] || die "Cannot find pipeline script: $PIPELINE"
 
-MODE=""
-WORK_ROOT=""
-PREFIX=""
-MAP_FILE=""
-ANCHOR_COL="Z23"
-SECONDARY_COL="B25"
-RNA_GROUPS="TC SC FC"
-DETECTION_MODE="full"
-DNA_THRESHOLD="0.99"
-RNA_THRESHOLD="0.90"
-IBS_ZMIN="0.7"
-IBS_ZMAX="1.0"
-RSCRIPT_BIN="Rscript"
-DRY_RUN="false"
+write_and_run_config() {
+  local mode="$1"
+  local work_root="$2"
+  local prefix="$3"
+  local map_file="$4"
+  local anchor_col="$5"
+  local secondary_col="$6"
+  local rna_groups="$7"
+  local detection_mode="$8"
+  local dna_threshold="$9"
+  local rna_threshold="${10}"
+  local zmin="${11}"
+  local zmax="${12}"
+  local rscript_bin="${13}"
+  local dry_run="${14}"
+  local reference_mibs="${15}"
+  local reference_id="${16}"
+  local query_mibs="${17}"
+  local query_id="${18}"
+  local mibs_file="${19}"
+  local ibs_id_file="${20}"
+  local project_root="${21}"
+  local reference_vcf_dir="${22}"
+  local query_vcf_dir="${23}"
+  local bcftools_bin="${24}"
+  local bgzip_bin="${25}"
+  local tabix_bin="${26}"
+  local plink_bin="${27}"
+  local parallel_bin="${28}"
+  local reference_max_geno="${29}"
+  local query_max_geno="${30}"
+  local threads_parallel="${31}"
+  local chr_set="${32}"
+  local chr_list="${33}"
+  local min_mac="${34}"
+  local high_het_threshold="${35}"
+  local copy_mode="${36}"
+  local reference_prefix="${37}"
+  local query_prefix="${38}"
+  local reference_groups="${39}"
+  local query_groups="${40}"
 
-MIBS_FILE=""
-IBS_ID_FILE=""
-REFERENCE_IBS_FILE=""
-REFERENCE_IBS_ID_FILE=""
-QUERY_IBS_FILE=""
-QUERY_IBS_ID_FILE=""
+  [[ -n "$mode" ]] || die "--mode is required"
+  [[ "$mode" == "ibs" || "$mode" == "vcf" ]] || die "--mode must be ibs or vcf"
+  [[ -n "$work_root" ]] || die "--work-root is required"
+  [[ -n "$prefix" ]] || die "--prefix is required"
+  [[ -n "$map_file" ]] || die "--map is required"
+  [[ -f "$map_file" ]] || die "Map file not found: $map_file"
 
-PROJECT_ROOT=""
-REFERENCE_VCF_SOURCE_DIR=""
-QUERY_VCF_SOURCE_DIR=""
-BCFTOOLS_BIN=""
-BGZIP_BIN=""
-TABIX_BIN=""
-PLINK_BIN=""
-PARALLEL_BIN=""
-REFERENCE_MAX_GENO="0.3"
-QUERY_MAX_GENO="0.4"
-THREADS_PARALLEL="8"
-CHR_SET="42"
-CHR_LIST=""
-MIN_MAC="2"
-HIGH_HET_THRESHOLD="0.05"
-COPY_MODE="link"
+  reference_prefix="${reference_prefix:-${prefix}_2group_reference}"
+  query_prefix="${query_prefix:-${prefix}_5group_query}"
+  query_groups="${query_groups:-Z23 B25 ${rna_groups}}"
 
-REFERENCE_PREFIX=""
-QUERY_PREFIX=""
-REFERENCE_ALL_GROUPS="Z23 B25"
-QUERY_ALL_GROUPS=""
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -h|--help) usage; exit 0 ;;
-    --mode) MODE="$2"; shift 2 ;;
-    --work-root) WORK_ROOT="$2"; shift 2 ;;
-    --prefix) PREFIX="$2"; shift 2 ;;
-    --map) MAP_FILE="$2"; shift 2 ;;
-    --anchor-col) ANCHOR_COL="$2"; shift 2 ;;
-    --secondary-col) SECONDARY_COL="$2"; shift 2 ;;
-    --rna-groups) RNA_GROUPS="$2"; shift 2 ;;
-    --detection-mode) DETECTION_MODE="$2"; shift 2 ;;
-    --dna-threshold) DNA_THRESHOLD="$2"; shift 2 ;;
-    --rna-threshold) RNA_THRESHOLD="$2"; shift 2 ;;
-    --zmin) IBS_ZMIN="$2"; shift 2 ;;
-    --zmax) IBS_ZMAX="$2"; shift 2 ;;
-    --rscript) RSCRIPT_BIN="$2"; shift 2 ;;
-    --dry-run) DRY_RUN="true"; shift ;;
-    --mibs) MIBS_FILE="$2"; shift 2 ;;
-    --id) IBS_ID_FILE="$2"; shift 2 ;;
-    --reference-mibs) REFERENCE_IBS_FILE="$2"; shift 2 ;;
-    --reference-id) REFERENCE_IBS_ID_FILE="$2"; shift 2 ;;
-    --query-mibs) QUERY_IBS_FILE="$2"; shift 2 ;;
-    --query-id) QUERY_IBS_ID_FILE="$2"; shift 2 ;;
-    --project-root) PROJECT_ROOT="$2"; shift 2 ;;
-    --reference-vcf-dir) REFERENCE_VCF_SOURCE_DIR="$2"; shift 2 ;;
-    --query-vcf-dir) QUERY_VCF_SOURCE_DIR="$2"; shift 2 ;;
-    --bcftools) BCFTOOLS_BIN="$2"; shift 2 ;;
-    --bgzip) BGZIP_BIN="$2"; shift 2 ;;
-    --tabix) TABIX_BIN="$2"; shift 2 ;;
-    --plink) PLINK_BIN="$2"; shift 2 ;;
-    --parallel) PARALLEL_BIN="$2"; shift 2 ;;
-    --reference-max-geno) REFERENCE_MAX_GENO="$2"; shift 2 ;;
-    --query-max-geno) QUERY_MAX_GENO="$2"; shift 2 ;;
-    --threads) THREADS_PARALLEL="$2"; shift 2 ;;
-    --chr-set) CHR_SET="$2"; shift 2 ;;
-    --chr-list) CHR_LIST="$2"; shift 2 ;;
-    --min-mac) MIN_MAC="$2"; shift 2 ;;
-    --high-het-threshold) HIGH_HET_THRESHOLD="$2"; shift 2 ;;
-    --copy-mode) COPY_MODE="$2"; shift 2 ;;
-    --reference-prefix) REFERENCE_PREFIX="$2"; shift 2 ;;
-    --query-prefix) QUERY_PREFIX="$2"; shift 2 ;;
-    --reference-groups) REFERENCE_ALL_GROUPS="$2"; shift 2 ;;
-    --query-groups) QUERY_ALL_GROUPS="$2"; shift 2 ;;
-    *) die "Unknown argument: $1" ;;
-  esac
-done
-
-[[ -n "$MODE" ]] || die "--mode is required"
-[[ "$MODE" == "ibs" || "$MODE" == "vcf" ]] || die "--mode must be ibs or vcf"
-[[ -n "$WORK_ROOT" ]] || die "--work-root is required"
-[[ -n "$PREFIX" ]] || die "--prefix is required"
-[[ -n "$MAP_FILE" ]] || die "--map is required"
-[[ -f "$MAP_FILE" ]] || die "Map file not found: $MAP_FILE"
-
-REFERENCE_PREFIX="${REFERENCE_PREFIX:-${PREFIX}_2group_reference}"
-QUERY_PREFIX="${QUERY_PREFIX:-${PREFIX}_5group_query}"
-QUERY_ALL_GROUPS="${QUERY_ALL_GROUPS:-Z23 B25 ${RNA_GROUPS}}"
-
-if [[ "$MODE" == "ibs" ]]; then
-  if [[ -n "$REFERENCE_IBS_FILE" || -n "$QUERY_IBS_FILE" ]]; then
-    [[ -f "$REFERENCE_IBS_FILE" ]] || die "Reference mibs not found: $REFERENCE_IBS_FILE"
-    [[ -f "$REFERENCE_IBS_ID_FILE" ]] || die "Reference id not found: $REFERENCE_IBS_ID_FILE"
-    [[ -f "$QUERY_IBS_FILE" ]] || die "Query mibs not found: $QUERY_IBS_FILE"
-    [[ -f "$QUERY_IBS_ID_FILE" ]] || die "Query id not found: $QUERY_IBS_ID_FILE"
-  else
-    [[ -f "$MIBS_FILE" ]] || die "Mibs not found: $MIBS_FILE"
-    [[ -f "$IBS_ID_FILE" ]] || die "ID file not found: $IBS_ID_FILE"
-  fi
-else
-  [[ -n "$PROJECT_ROOT" ]] || die "--project-root is required for vcf mode"
-  [[ -d "$REFERENCE_VCF_SOURCE_DIR" ]] || die "Reference VCF dir not found: $REFERENCE_VCF_SOURCE_DIR"
-  [[ -d "$QUERY_VCF_SOURCE_DIR" ]] || die "Query VCF dir not found: $QUERY_VCF_SOURCE_DIR"
-  [[ -x "$BCFTOOLS_BIN" || -f "$BCFTOOLS_BIN" ]] || die "bcftools not found: $BCFTOOLS_BIN"
-  [[ -x "$BGZIP_BIN" || -f "$BGZIP_BIN" ]] || die "bgzip not found: $BGZIP_BIN"
-  [[ -x "$TABIX_BIN" || -f "$TABIX_BIN" ]] || die "tabix not found: $TABIX_BIN"
-  [[ -x "$PLINK_BIN" || -f "$PLINK_BIN" ]] || die "plink not found: $PLINK_BIN"
-  [[ -x "$PARALLEL_BIN" || -f "$PARALLEL_BIN" ]] || die "parallel not found: $PARALLEL_BIN"
-fi
-
-mkdir -p "$WORK_ROOT"
-CONFIG_FILE="${WORK_ROOT}/${PREFIX}.camp_ibs.config.sh"
-
-{
-  echo "MODE=$(quote_sh "$MODE")"
-  echo "WORK_ROOT=$(quote_sh "$WORK_ROOT")"
-  echo "PREFIX=$(quote_sh "$PREFIX")"
-  echo "MAP_FILE=$(quote_sh "$MAP_FILE")"
-  echo "ANCHOR_COL=$(quote_sh "$ANCHOR_COL")"
-  echo "SECONDARY_COL=$(quote_sh "$SECONDARY_COL")"
-  echo "RNA_GROUPS=$(quote_sh "$RNA_GROUPS")"
-  echo "DETECTION_MODE=$(quote_sh "$DETECTION_MODE")"
-  echo "DNA_THRESHOLD=$DNA_THRESHOLD"
-  echo "RNA_THRESHOLD=$RNA_THRESHOLD"
-  echo "IBS_ZMIN=$IBS_ZMIN"
-  echo "IBS_ZMAX=$IBS_ZMAX"
-  echo "REFERENCE_PREFIX=$(quote_sh "$REFERENCE_PREFIX")"
-  echo "QUERY_PREFIX=$(quote_sh "$QUERY_PREFIX")"
-  echo "REFERENCE_ALL_GROUPS=$(quote_sh "$REFERENCE_ALL_GROUPS")"
-  echo "QUERY_ALL_GROUPS=$(quote_sh "$QUERY_ALL_GROUPS")"
-  echo "RSCRIPT_BIN=$(quote_sh "$RSCRIPT_BIN")"
-
-  if [[ "$MODE" == "ibs" ]]; then
-    if [[ -n "$REFERENCE_IBS_FILE" || -n "$QUERY_IBS_FILE" ]]; then
-      echo "REFERENCE_IBS_FILE=$(quote_sh "$REFERENCE_IBS_FILE")"
-      echo "REFERENCE_IBS_ID_FILE=$(quote_sh "$REFERENCE_IBS_ID_FILE")"
-      echo "QUERY_IBS_FILE=$(quote_sh "$QUERY_IBS_FILE")"
-      echo "QUERY_IBS_ID_FILE=$(quote_sh "$QUERY_IBS_ID_FILE")"
+  if [[ "$mode" == "ibs" ]]; then
+    if [[ -n "$reference_mibs" || -n "$query_mibs" ]]; then
+      [[ -f "$reference_mibs" ]] || die "Reference mibs not found: $reference_mibs"
+      [[ -f "$reference_id" ]] || die "Reference id not found: $reference_id"
+      [[ -f "$query_mibs" ]] || die "Query mibs not found: $query_mibs"
+      [[ -f "$query_id" ]] || die "Query id not found: $query_id"
     else
-      echo "IBS_FILE=$(quote_sh "$MIBS_FILE")"
-      echo "IBS_ID_FILE=$(quote_sh "$IBS_ID_FILE")"
+      [[ -f "$mibs_file" ]] || die "Mibs not found: $mibs_file"
+      [[ -f "$ibs_id_file" ]] || die "ID file not found: $ibs_id_file"
     fi
   else
-    echo "PROJECT_ROOT=$(quote_sh "$PROJECT_ROOT")"
-    echo "REFERENCE_VCF_SOURCE_DIR=$(quote_sh "$REFERENCE_VCF_SOURCE_DIR")"
-    echo "QUERY_VCF_SOURCE_DIR=$(quote_sh "$QUERY_VCF_SOURCE_DIR")"
-    echo "BCFTOOLS_BIN=$(quote_sh "$BCFTOOLS_BIN")"
-    echo "BGZIP_BIN=$(quote_sh "$BGZIP_BIN")"
-    echo "TABIX_BIN=$(quote_sh "$TABIX_BIN")"
-    echo "PLINK_BIN=$(quote_sh "$PLINK_BIN")"
-    echo "PARALLEL_BIN=$(quote_sh "$PARALLEL_BIN")"
-    echo "REFERENCE_MAX_GENO=$REFERENCE_MAX_GENO"
-    echo "QUERY_MAX_GENO=$QUERY_MAX_GENO"
-    echo "THREADS_PARALLEL=$THREADS_PARALLEL"
-    echo "CHR_SET=$CHR_SET"
-    echo "CHR_LIST=$(quote_sh "$CHR_LIST")"
-    echo "MIN_MAC=$MIN_MAC"
-    echo "HIGH_HET_THRESHOLD=$HIGH_HET_THRESHOLD"
-    echo "COPY_MODE=$(quote_sh "$COPY_MODE")"
+    [[ -n "$project_root" ]] || die "--project-root is required for vcf mode"
+    [[ -d "$reference_vcf_dir" ]] || die "Reference VCF dir not found: $reference_vcf_dir"
+    [[ -d "$query_vcf_dir" ]] || die "Query VCF dir not found: $query_vcf_dir"
+    [[ -x "$bcftools_bin" || -f "$bcftools_bin" ]] || die "bcftools not found: $bcftools_bin"
+    [[ -x "$bgzip_bin" || -f "$bgzip_bin" ]] || die "bgzip not found: $bgzip_bin"
+    [[ -x "$tabix_bin" || -f "$tabix_bin" ]] || die "tabix not found: $tabix_bin"
+    [[ -x "$plink_bin" || -f "$plink_bin" ]] || die "plink not found: $plink_bin"
+    [[ -x "$parallel_bin" || -f "$parallel_bin" ]] || die "parallel not found: $parallel_bin"
   fi
-} > "$CONFIG_FILE"
 
-echo "Wrote config: $CONFIG_FILE"
-if [[ "$DRY_RUN" == "true" ]]; then
-  echo "Dry run requested; pipeline not executed."
-  exit 0
+  mkdir -p "$work_root"
+  local config_file="${work_root}/${prefix}.camp_ibs.config.sh"
+  {
+    echo "MODE=$(quote_sh "$mode")"
+    echo "WORK_ROOT=$(quote_sh "$work_root")"
+    echo "PREFIX=$(quote_sh "$prefix")"
+    echo "MAP_FILE=$(quote_sh "$map_file")"
+    echo "ANCHOR_COL=$(quote_sh "$anchor_col")"
+    echo "SECONDARY_COL=$(quote_sh "$secondary_col")"
+    echo "RNA_GROUPS=$(quote_sh "$rna_groups")"
+    echo "DETECTION_MODE=$(quote_sh "$detection_mode")"
+    echo "DNA_THRESHOLD=$dna_threshold"
+    echo "RNA_THRESHOLD=$rna_threshold"
+    echo "IBS_ZMIN=$zmin"
+    echo "IBS_ZMAX=$zmax"
+    echo "REFERENCE_PREFIX=$(quote_sh "$reference_prefix")"
+    echo "QUERY_PREFIX=$(quote_sh "$query_prefix")"
+    echo "REFERENCE_ALL_GROUPS=$(quote_sh "$reference_groups")"
+    echo "QUERY_ALL_GROUPS=$(quote_sh "$query_groups")"
+    echo "RSCRIPT_BIN=$(quote_sh "$rscript_bin")"
+
+    if [[ "$mode" == "ibs" ]]; then
+      if [[ -n "$reference_mibs" || -n "$query_mibs" ]]; then
+        echo "REFERENCE_IBS_FILE=$(quote_sh "$reference_mibs")"
+        echo "REFERENCE_IBS_ID_FILE=$(quote_sh "$reference_id")"
+        echo "QUERY_IBS_FILE=$(quote_sh "$query_mibs")"
+        echo "QUERY_IBS_ID_FILE=$(quote_sh "$query_id")"
+      else
+        echo "IBS_FILE=$(quote_sh "$mibs_file")"
+        echo "IBS_ID_FILE=$(quote_sh "$ibs_id_file")"
+      fi
+    else
+      echo "PROJECT_ROOT=$(quote_sh "$project_root")"
+      echo "REFERENCE_VCF_SOURCE_DIR=$(quote_sh "$reference_vcf_dir")"
+      echo "QUERY_VCF_SOURCE_DIR=$(quote_sh "$query_vcf_dir")"
+      echo "BCFTOOLS_BIN=$(quote_sh "$bcftools_bin")"
+      echo "BGZIP_BIN=$(quote_sh "$bgzip_bin")"
+      echo "TABIX_BIN=$(quote_sh "$tabix_bin")"
+      echo "PLINK_BIN=$(quote_sh "$plink_bin")"
+      echo "PARALLEL_BIN=$(quote_sh "$parallel_bin")"
+      echo "REFERENCE_MAX_GENO=$reference_max_geno"
+      echo "QUERY_MAX_GENO=$query_max_geno"
+      echo "THREADS_PARALLEL=$threads_parallel"
+      echo "CHR_SET=$chr_set"
+      echo "CHR_LIST=$(quote_sh "$chr_list")"
+      echo "MIN_MAC=$min_mac"
+      echo "HIGH_HET_THRESHOLD=$high_het_threshold"
+      echo "COPY_MODE=$(quote_sh "$copy_mode")"
+    fi
+  } > "$config_file"
+
+  echo "Wrote config: $config_file"
+  if [[ "$dry_run" == "true" ]]; then
+    echo "Dry run requested; pipeline not executed for $prefix."
+    return 0
+  fi
+
+  bash "$PIPELINE" "$config_file"
+}
+
+run_single() {
+  local mode=""
+  local work_root=""
+  local prefix=""
+  local map_file=""
+  local anchor_col="Z23"
+  local secondary_col="B25"
+  local rna_groups="TC SC FC"
+  local detection_mode="full"
+  local dna_threshold="0.99"
+  local rna_threshold="0.90"
+  local zmin="0.7"
+  local zmax="1.0"
+  local rscript_bin="Rscript"
+  local dry_run="false"
+  local mibs_file=""
+  local ibs_id_file=""
+  local reference_mibs=""
+  local reference_id=""
+  local query_mibs=""
+  local query_id=""
+  local project_root=""
+  local reference_vcf_dir=""
+  local query_vcf_dir=""
+  local bcftools_bin=""
+  local bgzip_bin=""
+  local tabix_bin=""
+  local plink_bin=""
+  local parallel_bin=""
+  local reference_max_geno="0.3"
+  local query_max_geno="0.4"
+  local threads_parallel="8"
+  local chr_set="42"
+  local chr_list=""
+  local min_mac="2"
+  local high_het_threshold="0.05"
+  local copy_mode="link"
+  local reference_prefix=""
+  local query_prefix=""
+  local reference_groups="Z23 B25"
+  local query_groups=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      run) shift ;;
+      --mode) mode="$2"; shift 2 ;;
+      --work-root) work_root="$2"; shift 2 ;;
+      --prefix) prefix="$2"; shift 2 ;;
+      --map) map_file="$2"; shift 2 ;;
+      --anchor-col) anchor_col="$2"; shift 2 ;;
+      --secondary-col) secondary_col="$2"; shift 2 ;;
+      --rna-groups) rna_groups="$2"; shift 2 ;;
+      --detection-mode) detection_mode="$2"; shift 2 ;;
+      --dna-threshold) dna_threshold="$2"; shift 2 ;;
+      --rna-threshold) rna_threshold="$2"; shift 2 ;;
+      --zmin) zmin="$2"; shift 2 ;;
+      --zmax) zmax="$2"; shift 2 ;;
+      --rscript) rscript_bin="$2"; shift 2 ;;
+      --dry-run) dry_run="true"; shift ;;
+      --mibs) mibs_file="$2"; shift 2 ;;
+      --id) ibs_id_file="$2"; shift 2 ;;
+      --reference-mibs) reference_mibs="$2"; shift 2 ;;
+      --reference-id) reference_id="$2"; shift 2 ;;
+      --query-mibs) query_mibs="$2"; shift 2 ;;
+      --query-id) query_id="$2"; shift 2 ;;
+      --project-root) project_root="$2"; shift 2 ;;
+      --reference-vcf-dir) reference_vcf_dir="$2"; shift 2 ;;
+      --query-vcf-dir) query_vcf_dir="$2"; shift 2 ;;
+      --bcftools) bcftools_bin="$2"; shift 2 ;;
+      --bgzip) bgzip_bin="$2"; shift 2 ;;
+      --tabix) tabix_bin="$2"; shift 2 ;;
+      --plink) plink_bin="$2"; shift 2 ;;
+      --parallel) parallel_bin="$2"; shift 2 ;;
+      --reference-max-geno) reference_max_geno="$2"; shift 2 ;;
+      --query-max-geno) query_max_geno="$2"; shift 2 ;;
+      --threads) threads_parallel="$2"; shift 2 ;;
+      --chr-set) chr_set="$2"; shift 2 ;;
+      --chr-list) chr_list="$2"; shift 2 ;;
+      --min-mac) min_mac="$2"; shift 2 ;;
+      --high-het-threshold) high_het_threshold="$2"; shift 2 ;;
+      --copy-mode) copy_mode="$2"; shift 2 ;;
+      --reference-prefix) reference_prefix="$2"; shift 2 ;;
+      --query-prefix) query_prefix="$2"; shift 2 ;;
+      --reference-groups) reference_groups="$2"; shift 2 ;;
+      --query-groups) query_groups="$2"; shift 2 ;;
+      *) die "Unknown argument: $1" ;;
+    esac
+  done
+
+  write_and_run_config \
+    "$mode" "$work_root" "$prefix" "$map_file" "$anchor_col" "$secondary_col" "$rna_groups" \
+    "$detection_mode" "$dna_threshold" "$rna_threshold" "$zmin" "$zmax" "$rscript_bin" "$dry_run" \
+    "$reference_mibs" "$reference_id" "$query_mibs" "$query_id" "$mibs_file" "$ibs_id_file" \
+    "$project_root" "$reference_vcf_dir" "$query_vcf_dir" "$bcftools_bin" "$bgzip_bin" "$tabix_bin" \
+    "$plink_bin" "$parallel_bin" "$reference_max_geno" "$query_max_geno" "$threads_parallel" "$chr_set" \
+    "$chr_list" "$min_mac" "$high_het_threshold" "$copy_mode" "$reference_prefix" "$query_prefix" \
+    "$reference_groups" "$query_groups"
+}
+
+run_manifest() {
+  local manifest=""
+  local work_root=""
+  local anchor_col="Z23"
+  local secondary_col="B25"
+  local rna_groups="TC SC FC"
+  local detection_mode="full"
+  local dna_threshold="0.99"
+  local rna_threshold="0.90"
+  local zmin="0.7"
+  local zmax="1.0"
+  local rscript_bin="Rscript"
+  local dry_run="false"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --manifest) manifest="$2"; shift 2 ;;
+      --work-root) work_root="$2"; shift 2 ;;
+      --anchor-col) anchor_col="$2"; shift 2 ;;
+      --secondary-col) secondary_col="$2"; shift 2 ;;
+      --rna-groups) rna_groups="$2"; shift 2 ;;
+      --detection-mode) detection_mode="$2"; shift 2 ;;
+      --dna-threshold) dna_threshold="$2"; shift 2 ;;
+      --rna-threshold) rna_threshold="$2"; shift 2 ;;
+      --zmin) zmin="$2"; shift 2 ;;
+      --zmax) zmax="$2"; shift 2 ;;
+      --rscript) rscript_bin="$2"; shift 2 ;;
+      --dry-run) dry_run="true"; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "Unknown run-manifest argument: $1" ;;
+    esac
+  done
+
+  [[ -n "$manifest" ]] || die "run-manifest requires --manifest"
+  [[ -f "$manifest" ]] || die "Manifest not found: $manifest"
+  [[ -n "$work_root" ]] || die "run-manifest requires --work-root"
+
+  local manifest_abs
+  manifest_abs="$(cd "$(dirname "$manifest")" && pwd)/$(basename "$manifest")"
+  local manifest_dir
+  manifest_dir="$(dirname "$manifest_abs")"
+
+  awk -F '\t' '
+    NR == 1 {
+      for (i = 1; i <= NF; i++) h[$i] = i
+      required = "prefix map reference_mibs reference_id query_mibs query_id"
+      split(required, req, " ")
+      for (i in req) if (!(req[i] in h)) {
+        printf("Missing required manifest column: %s\n", req[i]) > "/dev/stderr"
+        exit 2
+      }
+      next
+    }
+    NF == 0 || $1 ~ /^#/ { next }
+    {
+      keys = "prefix map reference_mibs reference_id query_mibs query_id work_root anchor_col secondary_col rna_groups dna_threshold rna_threshold detection_mode zmin zmax"
+      nkeys = split(keys, k, " ")
+      out = ""
+      for (i = 1; i <= nkeys; i++) {
+        val = (k[i] in h) ? $(h[k[i]]) : ""
+        gsub(/\r$/, "", val)
+        gsub(/\034/, "", val)
+        out = out val "\034"
+      }
+      print out
+    }
+  ' "$manifest_abs" | while IFS=$'\034' read -r prefix map_file reference_mibs reference_id query_mibs query_id row_work_root row_anchor row_secondary row_rna row_dna row_rna_thr row_detection row_zmin row_zmax _; do
+    [[ -n "$prefix" ]] || continue
+
+    local task_work_root="${row_work_root:-${work_root}/${prefix}}"
+    local task_anchor="${row_anchor:-$anchor_col}"
+    local task_secondary="${row_secondary:-$secondary_col}"
+    local task_rna="${row_rna:-$rna_groups}"
+    local task_dna="${row_dna:-$dna_threshold}"
+    local task_rna_thr="${row_rna_thr:-$rna_threshold}"
+    local task_detection="${row_detection:-$detection_mode}"
+    local task_zmin="${row_zmin:-$zmin}"
+    local task_zmax="${row_zmax:-$zmax}"
+
+    if [[ "$map_file" != /* ]]; then map_file="${manifest_dir}/${map_file}"; fi
+    if [[ "$reference_mibs" != /* ]]; then reference_mibs="${manifest_dir}/${reference_mibs}"; fi
+    if [[ "$reference_id" != /* ]]; then reference_id="${manifest_dir}/${reference_id}"; fi
+    if [[ "$query_mibs" != /* ]]; then query_mibs="${manifest_dir}/${query_mibs}"; fi
+    if [[ "$query_id" != /* ]]; then query_id="${manifest_dir}/${query_id}"; fi
+
+    echo "[$(date '+%F %T')] manifest task: $prefix"
+    write_and_run_config \
+      "ibs" "$task_work_root" "$prefix" "$map_file" "$task_anchor" "$task_secondary" "$task_rna" \
+      "$task_detection" "$task_dna" "$task_rna_thr" "$task_zmin" "$task_zmax" "$rscript_bin" "$dry_run" \
+      "$reference_mibs" "$reference_id" "$query_mibs" "$query_id" "" "" \
+      "" "" "" "" "" "" "" "" "0.3" "0.4" "8" "42" "" "2" "0.05" "link" \
+      "${prefix}_2group_reference" "${prefix}_5group_query" "Z23 B25" "Z23 B25 ${task_rna}"
+  done
+}
+
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 1
 fi
 
-bash "$PIPELINE" "$CONFIG_FILE"
+case "$1" in
+  run-manifest)
+    shift
+    run_manifest "$@"
+    ;;
+  run)
+    shift
+    run_single "$@"
+    ;;
+  -h|--help)
+    usage
+    ;;
+  *)
+    run_single "$@"
+    ;;
+esac

@@ -86,6 +86,15 @@ So in practice you only need to run three config files, one per ploidy.
 
 Recommended usage:
 
+Batch run from a manifest table:
+
+```bash
+wheat_ibs_project/bin/camp-ibs run-manifest \
+  --manifest samples.tsv \
+  --work-root results \
+  --rscript Rscript
+```
+
 Packaged command-line wrapper from existing `.mibs/.mibs.id` files:
 
 ```bash

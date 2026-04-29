@@ -206,6 +206,34 @@ Important output tables:
 
 ## Example Commands
 
+### Batch IBS mode from a manifest
+
+Prepare a tab-delimited manifest:
+
+```text
+prefix	map	reference_mibs	reference_id	query_mibs	query_id
+C2	/data1/.../maps/c2_id_map.txt	/data1/.../C2_2groups_renamed.mibs	/data1/.../C2_2groups_renamed.mibs.id	/data1/.../C2_5groups.final_qc.mibs	/data1/.../C2_5groups.final_qc.mibs.id
+C4	/data1/.../maps/c4_id_map.txt	/data1/.../C4_2groups_renamed.mibs	/data1/.../C4_2groups_renamed.mibs.id	/data1/.../C4_5group_final_qc.mibs	/data1/.../C4_5group_final_qc.mibs.id
+C6	/data1/.../maps/c6_id_map.txt	/data1/.../C6_2groups_final_qc.mibs	/data1/.../C6_2groups_final_qc.mibs.id	/data1/.../C6_5group_final.mibs	/data1/.../C6_5group_final.mibs.id
+```
+
+Run all rows:
+
+```bash
+wheat_ibs_project/bin/camp-ibs run-manifest \
+  --manifest samples.tsv \
+  --work-root /data1/xuebing/Z25_bam/05_IBS/results \
+  --rscript /data1/xuebing/Z25_bam/Rscript
+```
+
+The wrapper creates one output folder per `prefix`:
+
+```text
+results/C2/
+results/C4/
+results/C6/
+```
+
 ### Paired IBS mode
 
 ```bash

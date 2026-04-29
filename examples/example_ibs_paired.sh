@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run the packaged CAMP IBS workflow from existing .mibs/.mibs.id files.
+# Run one packaged CAMP IBS workflow from existing .mibs/.mibs.id files.
 # Execute from the project root that contains ibs_file/ and maps/.
 
 wheat_ibs_project/bin/camp-ibs \
